@@ -399,7 +399,7 @@ private class BuildMPV: BaseBuild {
             array.append("-Dswift-flags=-sdk \(platform.isysroot) -target \(platform.deploymentTarget(arch))")
             array.append("-Dcocoa=enabled")
             array.append("-Dcoreaudio=enabled")
-            array.append("-Davfoundation=enabled")
+            array.append("-Davfoundation=disabled") // avoid linker dependency on AVSampleBuffer* symbols on macOS
             array.append("-Dgl-cocoa=enabled")
             array.append("-Dvideotoolbox-gl=enabled")
             array.append("-Dvideotoolbox-pl=enabled")
