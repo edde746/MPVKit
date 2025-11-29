@@ -71,6 +71,23 @@ jobs:
           rename 's/\.xcframework\.zip/-GPL\.xcframework\.zip/' *.xcframework.zip
           rename 's/\.xcframework\.checksum\.txt/-GPL\.xcframework\.checksum\.txt/' *.xcframework.checksum.txt
 
+      - name: Clean GPL build files
+        run: |
+          # remove libbluray, same as LGPL version
+          rm -rf ./dist/release/libbluray*.zip 
+          rm -rf ./dist/release/Libbluray*.zip 
+          rm -rf ./dist/release/Libbluray*.txt
+
+          rm -rf ./dist/FFmpeg*
+          rm -rf ./dist/release/FFmpeg
+          rm -rf ./dist/libmpv*
+          rm -rf ./dist/release/libmpv
+          rm -rf ./dist/release/xcframework
+
+      - name: Build LGPL version
+        run: |
+          make build version=${{ env.RELEASE_VERSION }}
+
       - name: Update Package.swift
         run: |
           rm -rf ./Package.swift
