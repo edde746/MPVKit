@@ -20,7 +20,6 @@ let package = Package(
             name: "_MPVKit",
             dependencies: [
                 "Libmpv", "_FFmpeg", "Libuchardet", "Libbluray",
-                .target(name: "Libluajit", condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/_MPVKit",
             linkerSettings: [
@@ -57,7 +56,6 @@ let package = Package(
             name: "_MPVKit-GPL",
             dependencies: [
                 "Libmpv-GPL", "_FFmpeg-GPL", "Libuchardet", "Libbluray",
-                .target(name: "Libluajit", condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/_MPVKit-GPL",
             linkerSettings: [
@@ -291,12 +289,6 @@ let package = Package(
             name: "Libuchardet",
             url: "https://github.com/mpvkit/libuchardet-build/releases/download/0.0.8-xcode/Libuchardet.xcframework.zip",
             checksum: "503202caa0dafb6996b2443f53408a713b49f6c2d4a26d7856fd6143513a50d7"
-        ),
-
-        .binaryTarget(
-            name: "Libluajit",
-            url: "https://github.com/mpvkit/libluajit-build/releases/download/2.1.0-xcode/Libluajit.xcframework.zip",
-            checksum: "8e76f267ee100ff5f3bbde7641b2240566df722241cdf8e135be7ef3d29e237a"
         ),
 
         .binaryTarget(

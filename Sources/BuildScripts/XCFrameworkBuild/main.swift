@@ -35,7 +35,6 @@ do {
 
     // mpv
     try BuildUchardet().buildALL()
-    try BuildLuaJIT().buildALL()
     try BuildMPV().buildALL()
 } catch {
     print(error.localizedDescription)
@@ -45,7 +44,7 @@ do {
 enum Library: String, CaseIterable {
     case libmpv, FFmpeg, libshaderc, vulkan, lcms2, libdovi, openssl, libunibreak, libfreetype,
         libfribidi, libharfbuzz, libass, libsmbclient, libplacebo, libdav1d, gmp, nettle, gnutls,
-        libuchardet, libbluray, libluajit, libuavs3d
+        libuchardet, libbluray, libuavs3d
     var version: String {
         switch self {
         case .libmpv:
@@ -88,8 +87,6 @@ enum Library: String, CaseIterable {
             return "0.0.8-xcode"
         case .libbluray:
             return "1.3.4-xcode"
-        case .libluajit:
-            return "2.1.0-xcode"
         case .libuavs3d:
             return "1.2.1-xcode"
         }
@@ -155,9 +152,6 @@ enum Library: String, CaseIterable {
         case .libbluray:
             return
                 "https://github.com/mpvkit/libbluray-build/releases/download/\(self.version)/libbluray-all.zip"
-        case .libluajit:
-            return
-                "https://github.com/mpvkit/libluajit-build/releases/download/\(self.version)/libluajit-all.zip"
         case .libuavs3d:
             return
                 "https://github.com/mpvkit/libuavs3d-build/releases/download/\(self.version)/libuavs3d-all.zip"
@@ -415,16 +409,6 @@ enum Library: String, CaseIterable {
                         "https://github.com/mpvkit/libbluray-build/releases/download/\(self.version)/Libbluray.xcframework.checksum.txt"
                 )
             ]
-        case .libluajit:
-            return [
-                .target(
-                    name: "Libluajit",
-                    url:
-                        "https://github.com/mpvkit/libluajit-build/releases/download/\(self.version)/Libluajit.xcframework.zip",
-                    checksum:
-                        "https://github.com/mpvkit/libluajit-build/releases/download/\(self.version)/Libluajit.xcframework.checksum.txt"
-                )
-            ]
         case .libuavs3d:
             return [
                 .target(
@@ -497,7 +481,7 @@ private class BuildMPV: BaseBuild {
             array.append("-Dvideotoolbox-pl=enabled")
             array.append("-Dmacos-touchbar=disabled")
             array.append("-Dmacos-media-player=disabled")
-            array.append("-Dlua=luajit")  // macos show video stats need enable
+            array.append("-Dlua=disabled")
         } else {
             array.append("-Dvideotoolbox-gl=disabled")
             array.append("-Dvideotoolbox-pl=enabled")
@@ -847,12 +831,6 @@ private class BuildBluray: ZipBaseBuild {
 private class BuildUchardet: ZipBaseBuild {
     init() {
         super.init(library: .libuchardet)
-    }
-}
-
-private class BuildLuaJIT: ZipBaseBuild {
-    init() {
-        super.init(library: .libluajit)
     }
 }
 
