@@ -492,10 +492,6 @@ private class BuildMPV: BaseBuild {
                 array.append("-Dcoreaudio=disabled")
                 array.append("-Daudiounit=disabled")
                 array.append("-Davfoundation=disabled")
-            } else if platform == .isimulator || platform == .tvsimulator {
-                array.append("-Daudiounit=disabled")
-                array.append("-Davfoundation=disabled")
-                array.append("-Dios-gl=enabled")
             } else {
                 array.append("-Daudiounit=enabled")
                 array.append("-Davfoundation=enabled")
