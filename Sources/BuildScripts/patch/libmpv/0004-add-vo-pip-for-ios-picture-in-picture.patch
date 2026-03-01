@@ -1,11 +1,20 @@
 diff --git a/meson.build b/meson.build
-index f6f8e7f..4f96357 100644
+index f6f8e7f..f392f2d 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -1341,6 +1341,15 @@ if host_machine.system() == 'darwin'
+@@ -1341,6 +1341,24 @@ if host_machine.system() == 'darwin'
      endif
  endif
  
++if host_machine.system() == 'darwin'
++    vo_pip = get_option('vo-pip')
++    features += {'vo-pip': vo_pip.allowed()}
++    if features['vo-pip']
++        sources += files('video/out/vo_pip.m')
++        dependencies += dependency('AVFoundation', required: false)
++    endif
++endif
++
 +if host_machine.system() == 'darwin'
 +    vo_pip = get_option('vo-pip')
 +    features += {'vo-pip': vo_pip.allowed()}
@@ -19,32 +28,38 @@ index f6f8e7f..4f96357 100644
                                 cc.has_function('vkCreateDisplayPlaneSurfaceKHR', prefix: '#include <vulkan/vulkan_core.h>',
                                                 dependencies: [vulkan])}
 diff --git a/meson.options b/meson.options
-index 81bc931..eda2e10 100644
+index 81bc931..4c7ac72 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -104,6 +104,7 @@ option('ios-gl', type: 'feature', value: 'auto', description: 'iOS OpenGL ES int
+@@ -104,6 +104,8 @@ option('ios-gl', type: 'feature', value: 'auto', description: 'iOS OpenGL ES int
  option('videotoolbox-gl', type: 'feature', value: 'auto', description: 'Videotoolbox with OpenGL')
  option('videotoolbox-pl', type: 'feature', value: 'auto', description: 'Videotoolbox with libplacebo')
  option('moltenvk', type: 'feature', value: 'auto', description: 'Moltenvk context')
++option('vo-pip', type: 'feature', value: 'auto', description: 'PiP video output (AVSampleBufferDisplayLayer)')
 +option('vo-pip', type: 'feature', value: 'auto', description: 'PiP video output (AVSampleBufferDisplayLayer)')
  
  # macOS features
  option('macos-10-15-4-features', type: 'feature', value: 'auto', description: 'macOS 10.15.4 SDK Features')
 diff --git a/video/out/vo.c b/video/out/vo.c
-index c9cde30..e0c0599 100644
+index c9cde30..f6d7f9c 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
-@@ -54,6 +54,7 @@ extern const struct vo_driver video_out_gpu;
+@@ -54,6 +54,8 @@ extern const struct vo_driver video_out_gpu;
  extern const struct vo_driver video_out_gpu_next;
  extern const struct vo_driver video_out_libmpv;
  extern const struct vo_driver video_out_null;
 +extern const struct vo_driver video_out_pip;
++extern const struct vo_driver video_out_pip;
  extern const struct vo_driver video_out_image;
  extern const struct vo_driver video_out_lavc;
  extern const struct vo_driver video_out_caca;
-@@ -105,6 +106,9 @@ static const struct vo_driver *const video_out_drivers[] =
+@@ -104,7 +106,13 @@ static const struct vo_driver *const video_out_drivers[] =
+     &video_out_null,
  
      // should not be auto-selected
++#if HAVE_VO_PIP
++    &video_out_pip,
++#endif
      &video_out_image,
 +#if HAVE_VO_PIP
 +    &video_out_pip,
@@ -54,10 +69,10 @@ index c9cde30..e0c0599 100644
      &video_out_caca,
 diff --git a/video/out/vo_pip.m b/video/out/vo_pip.m
 new file mode 100644
-index 0000000..1d50a3f
+index 0000000..7f9d797
 --- /dev/null
 +++ b/video/out/vo_pip.m
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,194 @@
 +/*
 + * PiP video output — feeds CVPixelBuffers from VideoToolbox
 + * to an AVSampleBufferDisplayLayer for iOS/macOS Picture-in-Picture.
@@ -95,7 +110,7 @@ index 0000000..1d50a3f
 +
 +struct priv {
 +    AVSampleBufferDisplayLayer *layer;
-+    CMTimebase *timebase;
++    CMTimebaseRef timebase;
 +};
 +
 +static CMSampleBufferRef create_sample_buffer(CVPixelBufferRef pixbuf, CMTimebaseRef timebase)
@@ -155,21 +170,8 @@ index 0000000..1d50a3f
 +    // Create a timebase anchored to the host clock so the display layer
 +    // has a time reference for frame scheduling
 +    CMTimebaseRef timebase = NULL;
-+    OSStatus status;
-+#if TARGET_OS_IPHONE
-+    // iOS 15.4+: use CMTimebaseCreateWithSourceClock
-+    if (@available(iOS 15.4, *)) {
-+        status = CMTimebaseCreateWithSourceClock(
-+            kCFAllocatorDefault, CMClockGetHostTimeClock(), &timebase);
-+    } else {
-+        // Fallback for iOS < 15.4
-+        status = CMTimebaseCreateWithMasterClock(
-+            kCFAllocatorDefault, CMClockGetHostTimeClock(), &timebase);
-+    }
-+#else
-+    status = CMTimebaseCreateWithSourceClock(
++    OSStatus status = CMTimebaseCreateWithSourceClock(
 +        kCFAllocatorDefault, CMClockGetHostTimeClock(), &timebase);
-+#endif
 +    if (status != noErr) {
 +        MP_ERR(vo, "vo_pip: failed to create CMTimebase\n");
 +        return -1;
