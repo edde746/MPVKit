@@ -54,10 +54,10 @@ index c9cde30..676f25a 100644
  
 diff --git a/video/out/vo_pip.m b/video/out/vo_pip.m
 new file mode 100644
-index 0000000..1b4921c
+index 0000000..9e78ba9
 --- /dev/null
 +++ b/video/out/vo_pip.m
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,219 @@
 +/*
 + * PiP video output — feeds CVPixelBuffers from VideoToolbox
 + * to an AVSampleBufferDisplayLayer for iOS/macOS Picture-in-Picture.
@@ -185,6 +185,11 @@ index 0000000..1b4921c
 +        p->timebase = NULL;
 +        return -1;
 +    }
++
++    // When created as a replacement VO at runtime, hwdec_devs may be NULL.
++    // Create our own (same approach as vo_mediacodec_embed).
++    if (!vo->hwdec_devs)
++        vo->hwdec_devs = hwdec_devices_create();
 +
 +    hwdec_devices_add(vo->hwdec_devs, &p->hwctx);
 +
