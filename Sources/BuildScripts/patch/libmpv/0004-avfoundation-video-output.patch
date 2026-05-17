@@ -7,8 +7,8 @@ Subject: [PATCH] AVfoundation video output
  meson.build                 |   15 +
  meson.options               |    1 +
  video/out/vo.c              |    4 +
- video/out/vo_avfoundation.m | 1745 +++++++++++++++++++++++++++++++++++
- 4 files changed, 1765 insertions(+)
+ video/out/vo_avfoundation.m | 1722 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 1742 insertions(+)
  create mode 100644 video/out/vo_avfoundation.m
 
 diff --git a/meson.build b/meson.build
@@ -77,7 +77,7 @@ new file mode 100644
 index 0000000000..1b3e13aece
 --- /dev/null
 +++ b/video/out/vo_avfoundation.m
-@@ -0,0 +1,1745 @@
+@@ -0,0 +1,1722 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -214,11 +214,6 @@ index 0000000000..1b3e13aece
 +    vo->monitor_par = 1.0;
 +}
 +
-+static int scale_osd_coord(int value, double scale)
-+{
-+    return scale > 0 ? MPMAX(0, (int)(value / scale + 0.5)) : value;
-+}
-+
 +static struct avf_render_geometry compute_render_geometry(struct vo *vo,
 +                                                          int frame_w,
 +                                                          int frame_h)
@@ -235,32 +230,12 @@ index 0000000000..1b3e13aece
 +        frame_h = vo->params ? vo->params->h : 0;
 +
 +    if (!p->composite_osd) {
-+        int src_w = src.x1 - src.x0;
-+        int src_h = src.y1 - src.y0;
-+        int dst_w = dst.x1 - dst.x0;
-+        int dst_h = dst.y1 - dst.y0;
-+        double scale_x = src_w > 0 && dst_w > 0 ? (double)dst_w / src_w : 1.0;
-+        double scale_y = src_h > 0 && dst_h > 0 ? (double)dst_h / src_h : 1.0;
-+        struct mp_osd_res osd_res = vo_osd;
-+
-+        osd_res.w = scale_osd_coord(vo_osd.w, scale_x);
-+        osd_res.h = scale_osd_coord(vo_osd.h, scale_y);
-+        osd_res.ml = scale_osd_coord(vo_osd.ml, scale_x);
-+        osd_res.mr = scale_osd_coord(vo_osd.mr, scale_x);
-+        osd_res.mt = scale_osd_coord(vo_osd.mt, scale_y);
-+        osd_res.mb = scale_osd_coord(vo_osd.mb, scale_y);
-+
-+        if (osd_res.w <= 0 && frame_w > 0)
-+            osd_res.w = frame_w;
-+        if (osd_res.h <= 0 && frame_h > 0)
-+            osd_res.h = frame_h;
-+
 +        return (struct avf_render_geometry){
-+            .w = osd_res.w,
-+            .h = osd_res.h,
++            .w = vo_osd.w,
++            .h = vo_osd.h,
 +            .src = src,
 +            .dst = dst,
-+            .osd_res = osd_res,
++            .osd_res = vo_osd,
 +        };
 +    }
 +
@@ -1780,7 +1755,9 @@ index 0000000000..1b3e13aece
 +    struct priv *p = vo->priv;
 +
 +    switch (request) {
++    case VOCTRL_VO_OPTS_CHANGED:
 +    case VOCTRL_SET_PANSCAN:
++        clear_subtitle_cache(p);
 +        sync_osd_layer_frame(vo);
 +        return VO_TRUE;
 +    case VOCTRL_RESET:
