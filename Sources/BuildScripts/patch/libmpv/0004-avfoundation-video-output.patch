@@ -7,8 +7,8 @@ Subject: [PATCH] AVfoundation video output
  meson.build                 |   15 +
  meson.options               |    1 +
  video/out/vo.c              |    4 +
- video/out/vo_avfoundation.m | 1722 +++++++++++++++++++++++++++++++++++
- 4 files changed, 1742 insertions(+)
+ video/out/vo_avfoundation.m | 1897 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 1917 insertions(+)
  create mode 100644 video/out/vo_avfoundation.m
 
 diff --git a/meson.build b/meson.build
@@ -77,7 +77,7 @@ new file mode 100644
 index 0000000000..1b3e13aece
 --- /dev/null
 +++ b/video/out/vo_avfoundation.m
-@@ -0,0 +1,1722 @@
+@@ -0,0 +1,1897 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -170,6 +170,10 @@ index 0000000000..1b3e13aece
 +    // Frame counter for periodic maintenance
 +    int frame_count;
 +    int queue_lead_ms;
++    int not_ready_drop_count;
++    int64_t last_not_ready_drop_ns;
++    int64_t last_display_recovery_ns;
++    int64_t last_video_enqueue_ns;
 +
 +    // Track if OSD callback was invoked this frame
 +    bool osd_callback_invoked;
@@ -187,6 +191,162 @@ index 0000000000..1b3e13aece
 +}
 +
 +static void dispatch_main_sync_safe(dispatch_block_t block);
++
++static id<AVQueuedSampleBufferRendering> active_sample_buffer_renderer(
++    AVSampleBufferDisplayLayer *displayLayer)
++{
++    if (!displayLayer)
++        return nil;
++
++    if (@available(iOS 17.0, tvOS 17.0, macOS 14.0, *))
++        return displayLayer.sampleBufferRenderer;
++
++    return displayLayer;
++}
++
++static AVQueuedSampleBufferRenderingStatus sample_buffer_renderer_status(
++    AVSampleBufferDisplayLayer *displayLayer)
++{
++    if (!displayLayer)
++        return AVQueuedSampleBufferRenderingStatusUnknown;
++
++    if (@available(iOS 17.0, tvOS 17.0, macOS 14.0, *))
++        return displayLayer.sampleBufferRenderer.status;
++
++    return displayLayer.status;
++}
++
++static bool sample_buffer_renderer_requires_flush(
++    AVSampleBufferDisplayLayer *displayLayer)
++{
++    if (!displayLayer)
++        return false;
++
++    if (@available(iOS 17.0, tvOS 17.0, macOS 14.0, *))
++        return displayLayer.sampleBufferRenderer.requiresFlushToResumeDecoding;
++
++    if (@available(iOS 14.0, tvOS 14.0, macOS 11.0, *))
++        return displayLayer.requiresFlushToResumeDecoding;
++
++    return false;
++}
++
++static bool sample_buffer_renderer_is_ready(AVSampleBufferDisplayLayer *displayLayer)
++{
++    id<AVQueuedSampleBufferRendering> renderer =
++        active_sample_buffer_renderer(displayLayer);
++    return renderer && renderer.isReadyForMoreMediaData;
++}
++
++static void sample_buffer_renderer_flush(AVSampleBufferDisplayLayer *displayLayer,
++                                         bool remove_image)
++{
++    if (!displayLayer)
++        return;
++
++    if (@available(iOS 17.0, tvOS 17.0, macOS 14.0, *)) {
++        AVSampleBufferVideoRenderer *renderer = displayLayer.sampleBufferRenderer;
++        if (remove_image) {
++            [renderer flushWithRemovalOfDisplayedImage:YES completionHandler:NULL];
++        } else {
++            [renderer flush];
++        }
++        return;
++    }
++
++    if (remove_image) {
++        [displayLayer flushAndRemoveImage];
++    } else {
++        [displayLayer flush];
++    }
++}
++
++static void sample_buffer_renderer_enqueue(AVSampleBufferDisplayLayer *displayLayer,
++                                           CMSampleBufferRef buf)
++{
++    id<AVQueuedSampleBufferRendering> renderer =
++        active_sample_buffer_renderer(displayLayer);
++    [renderer enqueueSampleBuffer:buf];
++}
++
++static bool display_layer_needs_recovery(AVSampleBufferDisplayLayer *displayLayer)
++{
++    if (!displayLayer)
++        return false;
++
++    return sample_buffer_renderer_status(displayLayer) ==
++               AVQueuedSampleBufferRenderingStatusFailed ||
++           sample_buffer_renderer_requires_flush(displayLayer);
++}
++
++static void recover_display_layer(struct vo *vo, const char *reason)
++{
++    struct priv *p = vo->priv;
++    AVSampleBufferDisplayLayer *displayLayer = [p->displayLayer retain];
++    AVSampleBufferDisplayLayer *osdLayer = [p->osdLayer retain];
++
++    if (!displayLayer) {
++        [osdLayer release];
++        return;
++    }
++
++    int64_t now = mp_time_ns();
++    if (p->last_display_recovery_ns &&
++        now - p->last_display_recovery_ns < MP_TIME_MS_TO_NS(500)) {
++        [displayLayer release];
++        [osdLayer release];
++        return;
++    }
++    p->last_display_recovery_ns = now;
++
++    __block AVQueuedSampleBufferRenderingStatus status =
++        AVQueuedSampleBufferRenderingStatusUnknown;
++    __block bool requires_flush = false;
++    __block bool ready = false;
++
++    dispatch_main_sync_safe(^{
++        status = sample_buffer_renderer_status(displayLayer);
++        requires_flush = sample_buffer_renderer_requires_flush(displayLayer);
++        ready = sample_buffer_renderer_is_ready(displayLayer);
++
++        sample_buffer_renderer_flush(displayLayer, false);
++        sample_buffer_renderer_flush(osdLayer, false);
++        if (p->timebase)
++            CMTimebaseSetTime(p->timebase, CMTimeMake(mp_time_ns(), NSEC_PER_SEC));
++    });
++
++    MP_WARN(vo, "Recovered AVFoundation display layer after %s "
++                "(status=%ld, requiresFlush=%s, ready=%s)\n",
++            reason, (long)status, requires_flush ? "yes" : "no",
++            ready ? "yes" : "no");
++
++    p->not_ready_drop_count = 0;
++    p->last_not_ready_drop_ns = 0;
++    p->last_video_enqueue_ns = 0;
++    p->osd_change_id = 0;
++    p->osd_needs_enqueue = false;
++
++    [displayLayer release];
++    [osdLayer release];
++}
++
++static void record_not_ready_drop(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    int64_t now = mp_time_ns();
++
++    if (p->last_not_ready_drop_ns == 0 ||
++        now - p->last_not_ready_drop_ns > MP_TIME_MS_TO_NS(500))
++        p->not_ready_drop_count = 0;
++
++    p->last_not_ready_drop_ns = now;
++    p->not_ready_drop_count++;
++
++    if (p->not_ready_drop_count >= 3 &&
++        (!p->last_video_enqueue_ns ||
++         now - p->last_video_enqueue_ns >= MP_TIME_MS_TO_NS(500)))
++        recover_display_layer(vo, "repeated not-ready drops");
++}
 +
 +static void update_avfoundation_geometry(struct vo *vo)
 +{
@@ -327,8 +487,14 @@ index 0000000000..1b3e13aece
 +static bool wait_until_ready_for_more_media_data(struct vo *vo, int64_t present_host_ns)
 +{
 +    struct priv *p = vo->priv;
-+    if ([p->displayLayer isReadyForMoreMediaData])
++    if (display_layer_needs_recovery(p->displayLayer))
++        recover_display_layer(vo, "layer recovery request");
++
++    if (sample_buffer_renderer_is_ready(p->displayLayer)) {
++        p->not_ready_drop_count = 0;
++        p->last_not_ready_drop_ns = 0;
 +        return true;
++    }
 +
 +    int64_t now = mp_time_ns();
 +    int64_t latest = present_host_ns > 0
@@ -339,17 +505,21 @@ index 0000000000..1b3e13aece
 +    if (give_up <= now) {
 +        MP_VERBOSE(vo, "Display layer not ready %.2f ms before PTS; dropping frame\n",
 +                   (present_host_ns - now) / 1000000.0);
++        record_not_ready_drop(vo);
 +        return false;
 +    }
 +
-+    while (![p->displayLayer isReadyForMoreMediaData]) {
++    while (!sample_buffer_renderer_is_ready(p->displayLayer)) {
 +        if (mp_time_ns() >= give_up) {
 +            MP_VERBOSE(vo, "Display layer not ready after bounded wait; dropping frame\n");
++            record_not_ready_drop(vo);
 +            return false;
 +        }
 +        mp_sleep_ns(MP_TIME_MS_TO_NS(1));
 +    }
 +
++    p->not_ready_drop_count = 0;
++    p->last_not_ready_drop_ns = 0;
 +    return true;
 +}
 +
@@ -1075,13 +1245,13 @@ index 0000000000..1b3e13aece
 +    if (!osdLayer)
 +        return false;
 +
-+    if (![osdLayer isReadyForMoreMediaData]) {
++    if (!sample_buffer_renderer_is_ready(osdLayer)) {
 +        MP_VERBOSE(vo, "OSD layer not ready; dropping subtitle sample for this frame\n");
 +        [osdLayer release];
 +        return false;
 +    }
 +
-+    [osdLayer enqueueSampleBuffer:buf];
++    sample_buffer_renderer_enqueue(osdLayer, buf);
 +    [osdLayer release];
 +
 +    return true;
@@ -1541,7 +1711,8 @@ index 0000000000..1b3e13aece
 +    if (!buf)
 +        return false;
 +
-+    [p->displayLayer enqueueSampleBuffer:buf];
++    sample_buffer_renderer_enqueue(p->displayLayer, buf);
++    p->last_video_enqueue_ns = mp_time_ns();
 +    return true;
 +}
 +
@@ -1664,7 +1835,7 @@ index 0000000000..1b3e13aece
 +        if (!osdLayer)
 +            return;
 +        dispatch_async(dispatch_get_main_queue(), ^{
-+            [osdLayer flushAndRemoveImage];
++            sample_buffer_renderer_flush(osdLayer, true);
 +            [osdLayer release];
 +        });
 +    }
@@ -1686,8 +1857,8 @@ index 0000000000..1b3e13aece
 +    struct priv *p = vo->priv;
 +
 +    mp_image_unrefp(&p->next_image);
-+    [p->displayLayer flushAndRemoveImage];
-+    [p->osdLayer flushAndRemoveImage];
++    sample_buffer_renderer_flush(p->displayLayer, true);
++    sample_buffer_renderer_flush(p->osdLayer, true);
 +
 +    if (p->timebase) {
 +        AVSampleBufferDisplayLayer *displayLayer = [p->displayLayer retain];
@@ -1763,8 +1934,12 @@ index 0000000000..1b3e13aece
 +    case VOCTRL_RESET:
 +        // Called when playback stops or video changes
 +        clear_subtitle_state(vo);
-+        [p->displayLayer flushAndRemoveImage];
-+        [p->osdLayer flushAndRemoveImage];
++        p->not_ready_drop_count = 0;
++        p->last_not_ready_drop_ns = 0;
++        p->last_display_recovery_ns = 0;
++        p->last_video_enqueue_ns = 0;
++        sample_buffer_renderer_flush(p->displayLayer, true);
++        sample_buffer_renderer_flush(p->osdLayer, true);
 +        if (p->timebase)
 +            CMTimebaseSetTime(p->timebase, CMTimeMake(mp_time_ns(), NSEC_PER_SEC));
 +        return VO_TRUE;
