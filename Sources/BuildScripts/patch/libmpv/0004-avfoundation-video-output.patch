@@ -95,6 +95,8 @@ index 0000000000..1b3e13aece
 + * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
 + */
 +
++#include <math.h>
++#include <stdlib.h>
 +#include <libavutil/hwcontext.h>
 +#include <libavutil/hwcontext_videotoolbox.h>
 +#include "common/common.h"
@@ -139,6 +141,8 @@ index 0000000000..1b3e13aece
 +    double next_pts;
 +    CMTimebaseRef timebase;
 +    int64_t next_present_host_ns;
++    int64_t next_media_pts_ns;
++    bool next_media_pts_valid;
 +    __strong AVSampleBufferDisplayLayer *displayLayer;
 +
 +    // OSD/Subtitle support (timed AVSampleBufferDisplayLayer overlay mode)
@@ -174,6 +178,13 @@ index 0000000000..1b3e13aece
 +    int64_t last_not_ready_drop_ns;
 +    int64_t last_display_recovery_ns;
 +    int64_t last_video_enqueue_ns;
++    int64_t last_media_pts_ns;
++    int64_t last_present_host_ns;
++    bool last_media_pts_valid;
++    bool timebase_anchor_valid;
++    bool timebase_paused;
++    bool playback_paused;
++    double timebase_rate;
 +
 +    // Track if OSD callback was invoked this frame
 +    bool osd_callback_invoked;
@@ -236,6 +247,140 @@ index 0000000000..1b3e13aece
 +    id<AVQueuedSampleBufferRendering> renderer =
 +        active_sample_buffer_renderer(displayLayer);
 +    return renderer && renderer.isReadyForMoreMediaData;
++}
++
++static bool media_pts_is_valid(double pts)
++{
++    return pts != MP_NOPTS_VALUE && isfinite(pts);
++}
++
++static int64_t media_pts_to_ns(double pts)
++{
++    return (int64_t)(pts * (double)NSEC_PER_SEC + (pts >= 0 ? 0.5 : -0.5));
++}
++
++static CMTime cm_time_from_ns(int64_t ns)
++{
++    return CMTimeMake(ns, NSEC_PER_SEC);
++}
++
++static int64_t cm_time_to_ns(CMTime time)
++{
++    if (!CMTIME_IS_NUMERIC(time))
++        return 0;
++
++    CMTime converted = CMTimeConvertScale(time, NSEC_PER_SEC,
++                                          kCMTimeRoundingMethod_Default);
++    return converted.value;
++}
++
++static int64_t current_media_time_ns(struct priv *p)
++{
++    if (p->next_media_pts_valid)
++        return p->next_media_pts_ns;
++    if (p->last_media_pts_valid)
++        return p->last_media_pts_ns;
++    if (p->timebase)
++        return cm_time_to_ns(CMTimebaseGetTime(p->timebase));
++    return 0;
++}
++
++static void reset_media_timing(struct priv *p)
++{
++    p->next_media_pts_ns = 0;
++    p->next_media_pts_valid = false;
++    p->last_media_pts_ns = 0;
++    p->last_present_host_ns = 0;
++    p->last_media_pts_valid = false;
++    p->timebase_anchor_valid = false;
++    p->timebase_paused = false;
++    p->playback_paused = false;
++    p->timebase_rate = 1.0;
++}
++
++static double infer_timebase_rate(struct priv *p, int64_t media_pts_ns,
++                                  int64_t present_host_ns)
++{
++    double rate = p->timebase_rate > 0.0 ? p->timebase_rate : 1.0;
++
++    if (!p->last_media_pts_valid || !p->last_present_host_ns)
++        return rate;
++
++    int64_t media_delta = media_pts_ns - p->last_media_pts_ns;
++    int64_t host_delta = present_host_ns - p->last_present_host_ns;
++    if (media_delta <= 0 || host_delta <= MP_TIME_MS_TO_NS(5))
++        return rate;
++
++    double inferred = (double)media_delta / (double)host_delta;
++    return inferred >= 0.05 && inferred <= 8.0 ? inferred : rate;
++}
++
++static void update_media_timebase_for_frame(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    if (!p->timebase || !p->next_media_pts_valid)
++        return;
++
++    int64_t now = mp_time_ns();
++    int64_t present_host_ns = p->next_present_host_ns > 0
++        ? p->next_present_host_ns
++        : now;
++    int64_t media_pts_ns = p->next_media_pts_ns;
++    double rate = p->playback_paused
++        ? 0.0
++        : infer_timebase_rate(p, media_pts_ns, present_host_ns);
++
++    bool should_anchor = !p->timebase_anchor_valid || p->timebase_paused ||
++        p->playback_paused || fabs(rate - p->timebase_rate) > 0.01;
++
++    if (!should_anchor) {
++        int64_t timebase_ns = cm_time_to_ns(CMTimebaseGetTime(p->timebase));
++        int64_t projected_ns = timebase_ns +
++            (int64_t)((double)(present_host_ns - now) * p->timebase_rate);
++        should_anchor = llabs(projected_ns - media_pts_ns) > MP_TIME_MS_TO_NS(20);
++    }
++
++    if (should_anchor) {
++        OSStatus err = CMTimebaseSetRateAndAnchorTime(
++            p->timebase, rate, cm_time_from_ns(media_pts_ns),
++            cm_time_from_ns(present_host_ns));
++        if (err != noErr) {
++            MP_WARN(vo, "Failed to anchor AVFoundation media timebase: %d\n", (int)err);
++        }
++        p->timebase_rate = rate;
++        p->timebase_anchor_valid = true;
++        p->timebase_paused = p->playback_paused;
++    }
++
++    p->last_media_pts_ns = media_pts_ns;
++    p->last_present_host_ns = present_host_ns;
++    p->last_media_pts_valid = true;
++}
++
++static void set_media_timebase_paused(struct vo *vo, bool paused)
++{
++    struct priv *p = vo->priv;
++    if (!p->timebase)
++        return;
++    p->playback_paused = paused;
++
++    if (paused) {
++        CMTime media_time = CMTimebaseGetTime(p->timebase);
++        if (!CMTIME_IS_NUMERIC(media_time)) {
++            media_time = cm_time_from_ns(p->last_media_pts_valid
++                ? p->last_media_pts_ns
++                : 0);
++        }
++        OSStatus err = CMTimebaseSetRateAndAnchorTime(
++            p->timebase, 0.0, media_time, cm_time_from_ns(mp_time_ns()));
++        if (err != noErr)
++            MP_WARN(vo, "Failed to pause AVFoundation media timebase: %d\n", (int)err);
++        p->timebase_paused = true;
++        return;
++    }
++
++    p->timebase_paused = false;
++    p->timebase_anchor_valid = false;
 +}
 +
 +static void sample_buffer_renderer_flush(AVSampleBufferDisplayLayer *displayLayer,
@@ -303,26 +448,35 @@ index 0000000000..1b3e13aece
 +        AVQueuedSampleBufferRenderingStatusUnknown;
 +    __block bool requires_flush = false;
 +    __block bool ready = false;
++    __block int64_t timebase_ns = 0;
++    __block double timebase_rate = 0.0;
 +
 +    dispatch_main_sync_safe(^{
 +        status = sample_buffer_renderer_status(displayLayer);
 +        requires_flush = sample_buffer_renderer_requires_flush(displayLayer);
 +        ready = sample_buffer_renderer_is_ready(displayLayer);
++        if (p->timebase) {
++            timebase_ns = cm_time_to_ns(CMTimebaseGetTime(p->timebase));
++            timebase_rate = CMTimebaseGetRate(p->timebase);
++        }
 +
 +        sample_buffer_renderer_flush(displayLayer, false);
 +        sample_buffer_renderer_flush(osdLayer, false);
-+        if (p->timebase)
-+            CMTimebaseSetTime(p->timebase, CMTimeMake(mp_time_ns(), NSEC_PER_SEC));
 +    });
 +
 +    MP_WARN(vo, "Recovered AVFoundation display layer after %s "
-+                "(status=%ld, requiresFlush=%s, ready=%s)\n",
++                "(status=%ld, requiresFlush=%s, ready=%s, "
++                "mediaPts=%.3f, timebase=%.3f, rate=%.3f)\n",
 +            reason, (long)status, requires_flush ? "yes" : "no",
-+            ready ? "yes" : "no");
++            ready ? "yes" : "no",
++            current_media_time_ns(p) / 1000000000.0,
++            timebase_ns / 1000000000.0, timebase_rate);
 +
 +    p->not_ready_drop_count = 0;
 +    p->last_not_ready_drop_ns = 0;
 +    p->last_video_enqueue_ns = 0;
++    p->timebase_anchor_valid = false;
++    p->timebase_paused = p->playback_paused;
 +    p->osd_change_id = 0;
 +    p->osd_needs_enqueue = false;
 +
@@ -1186,7 +1340,7 @@ index 0000000000..1b3e13aece
 +}
 +
 +static CMSampleBufferRef create_osd_sample_buffer(struct vo *vo,
-+                                                  int64_t present_host_ns,
++                                                  int64_t media_pts_ns,
 +                                                  bool *needed)
 +{
 +    struct priv *p = vo->priv;
@@ -1209,9 +1363,8 @@ index 0000000000..1b3e13aece
 +    if (!pixbuf)
 +        return NULL;
 +
-+    int64_t pts_ns = present_host_ns > 0 ? present_host_ns : mp_time_ns();
 +    CMSampleTimingInfo info = {
-+        .presentationTimeStamp = CMTimeMake(pts_ns, NSEC_PER_SEC),
++        .presentationTimeStamp = cm_time_from_ns(media_pts_ns),
 +        .duration = kCMTimeInvalid,
 +        .decodeTimeStamp = kCMTimeInvalid
 +    };
@@ -1533,8 +1686,9 @@ index 0000000000..1b3e13aece
 +        return -1;
 +    }
 +
-+    CMTimebaseSetTime(p->timebase, CMTimeMake(mp_time_ns(), NSEC_PER_SEC));
-+    CMTimebaseSetRate(p->timebase, 1.0);
++    reset_media_timing(p);
++    CMTimebaseSetTime(p->timebase, cm_time_from_ns(0));
++    CMTimebaseSetRate(p->timebase, 0.0);
 +    AVSampleBufferDisplayLayer *displayLayer = [p->displayLayer retain];
 +    CMTimebaseRef timebase = p->timebase;
 +    dispatch_main_sync_safe(^{
@@ -1663,7 +1817,7 @@ index 0000000000..1b3e13aece
 +        }
 +
 +        CMSampleTimingInfo info = {
-+            .presentationTimeStamp = CMTimeMake(p->next_present_host_ns, NSEC_PER_SEC),
++            .presentationTimeStamp = cm_time_from_ns(current_media_time_ns(p)),
 +            .duration = kCMTimeInvalid,
 +            .decodeTimeStamp = kCMTimeInvalid
 +        };
@@ -1727,13 +1881,15 @@ index 0000000000..1b3e13aece
 +        render_osd(vo, p->next_pts);
 +
 +        osd_buf = create_osd_sample_buffer(vo,
-+            p->next_present_host_ns, &osd_needed);
++            current_media_time_ns(p), &osd_needed);
 +
 +        CMSampleBufferRef video_buf = create_video_sample_buffer(vo, p->next_image);
 +
 +        bool osd_enqueued = !osd_needed;
 +
 +        if (video_buf && wait_until_ready_for_more_media_data(vo, p->next_present_host_ns)) {
++            update_media_timebase_for_frame(vo);
++
 +            if (osd_buf) {
 +                osd_enqueued = enqueue_osd_sample(vo, osd_buf);
 +                if (osd_enqueued)
@@ -1776,6 +1932,7 @@ index 0000000000..1b3e13aece
 +    if (!frame->current || (frame->repeat && !frame->redraw)) {
 +        p->next_pts = MP_NOPTS_VALUE;
 +        p->next_present_host_ns = mp_time_ns();
++        p->next_media_pts_valid = false;
 +        return true;
 +    }
 +
@@ -1786,11 +1943,13 @@ index 0000000000..1b3e13aece
 +    double pts = p->next_image->pts;
 +    if (pts == MP_NOPTS_VALUE)
 +        pts = frame->current->pts;
-+    if (pts == MP_NOPTS_VALUE)
-+        pts = frame->pts;
 +
 +    p->next_pts = pts;
 +    p->next_present_host_ns = frame->pts > 0 ? frame->pts : mp_time_ns();
++    p->next_media_pts_valid = media_pts_is_valid(pts);
++    p->next_media_pts_ns = p->next_media_pts_valid
++        ? media_pts_to_ns(pts)
++        : current_media_time_ns(p);
 +    return true;
 +}
 +
@@ -1938,10 +2097,22 @@ index 0000000000..1b3e13aece
 +        p->last_not_ready_drop_ns = 0;
 +        p->last_display_recovery_ns = 0;
 +        p->last_video_enqueue_ns = 0;
++        bool was_paused = p->playback_paused;
++        reset_media_timing(p);
++        p->playback_paused = was_paused;
++        p->timebase_paused = was_paused;
 +        sample_buffer_renderer_flush(p->displayLayer, true);
 +        sample_buffer_renderer_flush(p->osdLayer, true);
-+        if (p->timebase)
-+            CMTimebaseSetTime(p->timebase, CMTimeMake(mp_time_ns(), NSEC_PER_SEC));
++        if (p->timebase) {
++            CMTimebaseSetTime(p->timebase, cm_time_from_ns(0));
++            CMTimebaseSetRate(p->timebase, 0.0);
++        }
++        return VO_TRUE;
++    case VOCTRL_PAUSE:
++        set_media_timebase_paused(vo, true);
++        return VO_TRUE;
++    case VOCTRL_RESUME:
++        set_media_timebase_paused(vo, false);
 +        return VO_TRUE;
 +    case VOCTRL_REDRAW:
 +        p->osd_change_id = 0;
