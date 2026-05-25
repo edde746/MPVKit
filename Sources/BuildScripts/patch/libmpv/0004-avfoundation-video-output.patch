@@ -7,8 +7,8 @@ Subject: [PATCH] AVfoundation video output
  meson.build                 |   15 +
  meson.options               |    1 +
  video/out/vo.c              |    4 +
- video/out/vo_avfoundation.m | 2419 +++++++++++++++++++++++++++++++++++
- 4 files changed, 2439 insertions(+)
+ video/out/vo_avfoundation.m | 2496 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 2516 insertions(+)
  create mode 100644 video/out/vo_avfoundation.m
 
 diff --git a/meson.build b/meson.build
@@ -77,7 +77,7 @@ new file mode 100644
 index 0000000000..1b3e13aece
 --- /dev/null
 +++ b/video/out/vo_avfoundation.m
-@@ -0,0 +1,2419 @@
+@@ -0,0 +1,2496 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -937,13 +937,49 @@ index 0000000000..1b3e13aece
 +        set_colorspace_from_attachments(pixbuf);
 +}
 +
++static void copy_pixel_buffer_attachment(CVBufferRef src, CVBufferRef dst,
++                                         CFStringRef key)
++{
++    CVAttachmentMode mode = kCVAttachmentMode_ShouldPropagate;
++    CFTypeRef value = CVBufferGetAttachment(src, key, &mode);
++    if (value) {
++        CVBufferSetAttachment(dst, key, value, mode);
++    } else {
++        CVBufferRemoveAttachment(dst, key);
++    }
++}
++
 +static void copy_pixel_buffer_metadata(CVPixelBufferRef src, CVPixelBufferRef dst,
 +                                       OSType dst_format)
 +{
 +    CVBufferPropagateAttachments(src, dst);
++
++    const CFStringRef keys[] = {
++        kCVImageBufferCGColorSpaceKey,
++        kCVImageBufferICCProfileKey,
++        kCVImageBufferGammaLevelKey,
++        kCVImageBufferColorPrimariesKey,
++        kCVImageBufferTransferFunctionKey,
++        kCVImageBufferYCbCrMatrixKey,
++        kCVImageBufferMasteringDisplayColorVolumeKey,
++        kCVImageBufferContentLightLevelInfoKey,
++        kCVImageBufferChromaLocationTopFieldKey,
++        kCVImageBufferChromaLocationBottomFieldKey,
++        kCVImageBufferChromaSubsamplingKey,
++        kCVImageBufferCleanApertureKey,
++        kCVImageBufferPreferredCleanApertureKey,
++        kCVImageBufferPixelAspectRatioKey,
++    };
++
++    for (int i = 0; i < MP_ARRAY_SIZE(keys); i++)
++        copy_pixel_buffer_attachment(src, dst, keys[i]);
++
 +    if (!is_biplanar_yuv_format(dst_format))
 +        CVBufferRemoveAttachment(dst, kCVImageBufferYCbCrMatrixKey);
-+    set_colorspace_from_attachments(dst);
++
++    if (!CVBufferGetAttachment(dst, kCVImageBufferCGColorSpaceKey, NULL) &&
++        !is_biplanar_yuv_format(dst_format))
++        set_colorspace_from_attachments(dst);
 +}
 +
 +static void get_yuv_coefficients(CVPixelBufferRef pixbuf, double *kr, double *kb)
@@ -1754,7 +1790,7 @@ index 0000000000..1b3e13aece
 +}
 +
 +static CVPixelBufferRef composite_yuv_frame(struct vo *vo, CVPixelBufferRef videoBuffer,
-+                                           OSType sourceFormat)
++                                           OSType sourceFormat, bool in_place)
 +{
 +    struct priv *p = vo->priv;
 +
@@ -1767,21 +1803,65 @@ index 0000000000..1b3e13aece
 +    if (videoW <= 0 || videoH <= 0)
 +        return NULL;
 +
-+    if (!create_output_pool(vo, videoW, videoH, sourceFormat))
++    int subW = (int)CVPixelBufferGetWidth(p->cachedSubtitleBuffer);
++    int subH = (int)CVPixelBufferGetHeight(p->cachedSubtitleBuffer);
++    if (subW <= 0 || subH <= 0)
++        return NULL;
++
++    struct avf_render_geometry geometry = get_render_geometry(vo, videoW, videoH);
++    struct mp_rect src = geometry.src;
++    struct mp_rect dst = geometry.dst;
++    int srcW = src.x1 - src.x0;
++    int srcH = src.y1 - src.y0;
++    int dstW = dst.x1 - dst.x0;
++    int dstH = dst.y1 - dst.y0;
++    if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0)
++        return NULL;
++
++    int video_x0 = MPCLAMP(src.x0, 0, videoW);
++    int video_y0 = MPCLAMP(src.y0, 0, videoH);
++    int video_x1 = MPCLAMP(src.x1, 0, videoW);
++    int video_y1 = MPCLAMP(src.y1, 0, videoH);
++    if (video_x1 <= video_x0 || video_y1 <= video_y0)
++        return NULL;
++
++    int osd_x0 = MPMAX(p->subtitle_x0, MPMAX(dst.x0, 0));
++    int osd_y0 = MPMAX(p->subtitle_y0, MPMAX(dst.y0, 0));
++    int osd_x1 = MPMIN(p->subtitle_x1, MPMIN(dst.x1, subW));
++    int osd_y1 = MPMIN(p->subtitle_y1, MPMIN(dst.y1, subH));
++    if (osd_x1 <= osd_x0 || osd_y1 <= osd_y0)
++        return NULL;
++
++    int vx0 = src.x0 + (int)(((int64_t)(osd_x0 - dst.x0) * srcW) / dstW) - 1;
++    int vy0 = src.y0 + (int)(((int64_t)(osd_y0 - dst.y0) * srcH) / dstH) - 1;
++    int vx1 = src.x0 + (int)((((int64_t)(osd_x1 - dst.x0) * srcW) + dstW - 1) / dstW) + 1;
++    int vy1 = src.y0 + (int)((((int64_t)(osd_y1 - dst.y0) * srcH) + dstH - 1) / dstH) + 1;
++    vx0 = MPCLAMP(vx0, video_x0, video_x1);
++    vy0 = MPCLAMP(vy0, video_y0, video_y1);
++    vx1 = MPCLAMP(vx1, video_x0, video_x1);
++    vy1 = MPCLAMP(vy1, video_y0, video_y1);
++    if (vx1 <= vx0 || vy1 <= vy0)
 +        return NULL;
 +
 +    CVPixelBufferRef outputBuffer = NULL;
-+    CVReturn status = CVPixelBufferPoolCreatePixelBuffer(
-+        kCFAllocatorDefault, p->outputPool, &outputBuffer);
-+    if (status != kCVReturnSuccess || !outputBuffer) {
-+        MP_ERR(vo, "Failed to get YUV composite buffer: %d\n", status);
-+        return NULL;
-+    }
++    if (in_place) {
++        outputBuffer = CVPixelBufferRetain(videoBuffer);
++    } else {
++        if (!create_output_pool(vo, videoW, videoH, sourceFormat))
++            return NULL;
 +
-+    copy_pixel_buffer_metadata(videoBuffer, outputBuffer, sourceFormat);
-+    if (!copy_pixel_buffer_planes(videoBuffer, outputBuffer)) {
-+        CVPixelBufferRelease(outputBuffer);
-+        return NULL;
++        CVReturn status = CVPixelBufferPoolCreatePixelBuffer(
++            kCFAllocatorDefault, p->outputPool, &outputBuffer);
++        if (status != kCVReturnSuccess || !outputBuffer) {
++            MP_ERR(vo, "Failed to get YUV composite buffer: %d\n", status);
++            return NULL;
++        }
++
++        copy_pixel_buffer_metadata(videoBuffer, outputBuffer, sourceFormat);
++        if (!copy_pixel_buffer_planes(videoBuffer, outputBuffer)) {
++            CVPixelBufferRelease(outputBuffer);
++            return NULL;
++        }
 +    }
 +
 +    if (CVPixelBufferLockBaseAddress(outputBuffer, 0) != kCVReturnSuccess) {
@@ -1797,8 +1877,6 @@ index 0000000000..1b3e13aece
 +
 +    uint8_t *subBase = CVPixelBufferGetBaseAddress(p->cachedSubtitleBuffer);
 +    size_t subStride = CVPixelBufferGetBytesPerRow(p->cachedSubtitleBuffer);
-+    int subW = (int)CVPixelBufferGetWidth(p->cachedSubtitleBuffer);
-+    int subH = (int)CVPixelBufferGetHeight(p->cachedSubtitleBuffer);
 +    uint8_t *yBase = CVPixelBufferGetBaseAddressOfPlane(outputBuffer, 0);
 +    uint8_t *uvBase = CVPixelBufferGetBaseAddressOfPlane(outputBuffer, 1);
 +    size_t yStride = CVPixelBufferGetBytesPerRowOfPlane(outputBuffer, 0);
@@ -1822,19 +1900,14 @@ index 0000000000..1b3e13aece
 +    double cCenter = p010 ? 512.0 : 128.0;
 +    double cRange = fullRange ? (p010 ? 1023.0 : 255.0) : (p010 ? 896.0 : 224.0);
 +
-+    int vx0 = MPCLAMP((p->subtitle_x0 * videoW) / subW - 1, 0, videoW);
-+    int vy0 = MPCLAMP((p->subtitle_y0 * videoH) / subH - 1, 0, videoH);
-+    int vx1 = MPCLAMP(((p->subtitle_x1 * videoW) + subW - 1) / subW + 1, 0, videoW);
-+    int vy1 = MPCLAMP(((p->subtitle_y1 * videoH) + subH - 1) / subH + 1, 0, videoH);
-+
 +    for (int y = vy0; y < vy1; y++) {
-+        int sy = MPCLAMP((int)((int64_t)y * subH / videoH), 0, subH - 1);
++        int sy = MPCLAMP(dst.y0 + (int)(((int64_t)(y - src.y0) * dstH) / srcH), 0, subH - 1);
 +        uint8_t *subRow = subBase + (size_t)sy * subStride;
 +        if (p010) {
 +            uint16_t *yRow = (uint16_t *)(yBase + (size_t)y * yStride);
 +            uint16_t *uvRow = (uint16_t *)(uvBase + (size_t)(y / 2) * uvStride);
 +            for (int x = vx0; x < vx1; x++) {
-+                int sx = MPCLAMP((int)((int64_t)x * subW / videoW), 0, subW - 1);
++                int sx = MPCLAMP(dst.x0 + (int)(((int64_t)(x - src.x0) * dstW) / srcW), 0, subW - 1);
 +                uint8_t *sp = subRow + (size_t)sx * 4;
 +                double alpha = sp[3] / 255.0;
 +                if (alpha <= 0.0)
@@ -1861,7 +1934,7 @@ index 0000000000..1b3e13aece
 +            uint8_t *yRow = yBase + (size_t)y * yStride;
 +            uint8_t *uvRow = uvBase + (size_t)(y / 2) * uvStride;
 +            for (int x = vx0; x < vx1; x++) {
-+                int sx = MPCLAMP((int)((int64_t)x * subW / videoW), 0, subW - 1);
++                int sx = MPCLAMP(dst.x0 + (int)(((int64_t)(x - src.x0) * dstW) / srcW), 0, subW - 1);
 +                uint8_t *sp = subRow + (size_t)sx * 4;
 +                double alpha = sp[3] / 255.0;
 +                if (alpha <= 0.0)
@@ -1899,7 +1972,11 @@ index 0000000000..1b3e13aece
 +
 +    OSType sourceFormat = CVPixelBufferGetPixelFormatType(videoBuffer);
 +    if (is_biplanar_yuv_format(sourceFormat)) {
-+        CVPixelBufferRef composited = composite_yuv_frame(vo, videoBuffer, sourceFormat);
++        CVPixelBufferRef composited = composite_yuv_frame(vo, videoBuffer, sourceFormat, true);
++        if (composited)
++            return composited;
++
++        composited = composite_yuv_frame(vo, videoBuffer, sourceFormat, false);
 +        if (composited)
 +            return composited;
 +    }
