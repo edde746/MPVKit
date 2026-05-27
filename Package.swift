@@ -140,38 +140,38 @@ let package = Package(
 
         .binaryTarget(
             name: "Libavcodec",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavcodec.xcframework.zip",
-            checksum: "98596d956183fc0808755580a160dbfe3abe8b767c30edd2307345cf24580a34"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libavcodec.xcframework.zip",
+            checksum: "a5801def6fbc054f70f219d02f59f4d7df39c009d0603001543bfa7343aabbb1"
         ),
         .binaryTarget(
             name: "Libavdevice",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavdevice.xcframework.zip",
-            checksum: "3ee36f45bef47a52ccd41435e4da6c4a1936c031ef60d8ef13d2b0df2dbe0781"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libavdevice.xcframework.zip",
+            checksum: "34ed7b445a4c97f24000f68df6e44425b2f0a6c6bbaabe210f8b2e750bf6f5a0"
         ),
         .binaryTarget(
             name: "Libavformat",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavformat.xcframework.zip",
-            checksum: "66c5f0f4ebd3bbaca001f0033fb7144ab5701c58e72e6db77e31d1e79d3e814c"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libavformat.xcframework.zip",
+            checksum: "c288a6e61022f5aeb4bd12b9d1eb13b823c1eed96ec793927be4b297ddd159e9"
         ),
         .binaryTarget(
             name: "Libavfilter",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavfilter.xcframework.zip",
-            checksum: "9f1f7471500a0ee2dc2e5843866dbe86b498e98174a25867aacac0acc9c486e2"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libavfilter.xcframework.zip",
+            checksum: "2a74d9b6c2dc3472acdcdad67f826965bd2406ee9105a05c5fab549a43a89276"
         ),
         .binaryTarget(
             name: "Libavutil",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavutil.xcframework.zip",
-            checksum: "4db717244e75363c48d7722b1b13739c579f56e577d6413e52a874d98ca7f4ca"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libavutil.xcframework.zip",
+            checksum: "9452c5aeae265686641d5e4c42c419579a5710e9ccd0d8e52e3c7361f4aa225e"
         ),
         .binaryTarget(
             name: "Libswresample",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libswresample.xcframework.zip",
-            checksum: "e0274a222a392c8fd9d62179f1b13cfe4e6e21fdc200ede521ad7615f8d047ea"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libswresample.xcframework.zip",
+            checksum: "52996e9e3ad7adc1c90d3061283d23d1e6c0b376fa371d9d47a09296944c13fc"
         ),
         .binaryTarget(
             name: "Libswscale",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libswscale.xcframework.zip",
-            checksum: "1d38562b520f1998a0382f9ba6da81535557f07986f2b6035399ee38f2e0e91b"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libswscale.xcframework.zip",
+            checksum: "e295f4cb0ff6fa392b7e4360571eb8204c4ee000855027e04b248f30430673ed"
         ),
 
         .binaryTarget(
@@ -188,8 +188,8 @@ let package = Package(
 
         .binaryTarget(
             name: "Libmpv",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libmpv.xcframework.zip",
-            checksum: "489aa70cd9fffcbdaa95fc1d83dd92cfca26c0a1f5c12c09fa914361560b4b0f"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip/Libmpv.xcframework.zip",
+            checksum: "4b3d7086e593009b276ce3fa9481f2f0bceae00f224cd746770bce2b22b55632"
         ),
         //AUTO_GENERATE_TARGETS_END//
     ]
