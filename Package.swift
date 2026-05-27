@@ -140,38 +140,38 @@ let package = Package(
 
         .binaryTarget(
             name: "Libavcodec",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libavcodec.xcframework.zip",
-            checksum: "b357d6d1feb30b4bc5f84b09557eb1fa57aa968ab8505f96c177b520114f95ac"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavcodec.xcframework.zip",
+            checksum: "98596d956183fc0808755580a160dbfe3abe8b767c30edd2307345cf24580a34"
         ),
         .binaryTarget(
             name: "Libavdevice",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libavdevice.xcframework.zip",
-            checksum: "1524e459f14a18fb928e817021d9032571c0330b6950e368c8a50bbe7f29b859"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavdevice.xcframework.zip",
+            checksum: "3ee36f45bef47a52ccd41435e4da6c4a1936c031ef60d8ef13d2b0df2dbe0781"
         ),
         .binaryTarget(
             name: "Libavformat",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libavformat.xcframework.zip",
-            checksum: "36c68d5721be45bb3d778b77bde1f550c1e5a9a74e5ecdb35445ef29a3424b99"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavformat.xcframework.zip",
+            checksum: "66c5f0f4ebd3bbaca001f0033fb7144ab5701c58e72e6db77e31d1e79d3e814c"
         ),
         .binaryTarget(
             name: "Libavfilter",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libavfilter.xcframework.zip",
-            checksum: "f88f3b0ff06daef6d1662b65ce0a0d28cb144f6cfe917aefbc40093103ae89a0"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavfilter.xcframework.zip",
+            checksum: "9f1f7471500a0ee2dc2e5843866dbe86b498e98174a25867aacac0acc9c486e2"
         ),
         .binaryTarget(
             name: "Libavutil",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libavutil.xcframework.zip",
-            checksum: "9e845f4327a254d9ceac8180fbac7f66dd75516c4d5bb8f9efb05c7b65f22a7d"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libavutil.xcframework.zip",
+            checksum: "4db717244e75363c48d7722b1b13739c579f56e577d6413e52a874d98ca7f4ca"
         ),
         .binaryTarget(
             name: "Libswresample",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libswresample.xcframework.zip",
-            checksum: "80b3ffde7d5d0269da3a2bc0a93f6eb8437cac555ae99feadee2b228c018c0e7"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libswresample.xcframework.zip",
+            checksum: "e0274a222a392c8fd9d62179f1b13cfe4e6e21fdc200ede521ad7615f8d047ea"
         ),
         .binaryTarget(
             name: "Libswscale",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libswscale.xcframework.zip",
-            checksum: "88e7a02350883b7aa009118b8bb743825aa49faf5b7a0cd81f0b994965d0a038"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libswscale.xcframework.zip",
+            checksum: "1d38562b520f1998a0382f9ba6da81535557f07986f2b6035399ee38f2e0e91b"
         ),
 
         .binaryTarget(
@@ -188,8 +188,8 @@ let package = Package(
 
         .binaryTarget(
             name: "Libmpv",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8/Libmpv.xcframework.zip",
-            checksum: "cd2ec4a4005df42cd5bac7f48b2d2a2aaa5e32534666eea54f0440dc41c09552"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua/Libmpv.xcframework.zip",
+            checksum: "489aa70cd9fffcbdaa95fc1d83dd92cfca26c0a1f5c12c09fa914361560b4b0f"
         ),
         //AUTO_GENERATE_TARGETS_END//
     ]
