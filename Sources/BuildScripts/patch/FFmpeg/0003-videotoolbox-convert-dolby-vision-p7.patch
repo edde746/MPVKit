@@ -3,11 +3,11 @@ From: edde746 <86283021+edde746@users.noreply.github.com>
 Date: Thu, 7 May 2026 14:15:00 +0200
 Subject: [PATCH] videotoolbox: convert Dolby Vision profile 7 to profile 8.1
 
-Use the bundled libdovi C API to rewrite profile 7 RPU NALs to profile
-8.1 before VideoToolbox decode while preserving the mapping curves.
-Enhancement-layer NALs are dropped and the format description advertises a
-synthetic P8.1 dvvC atom so Apple can decode the compatible base layer
-through its native Dolby Vision path.
+Use the bundled libdovi C API to rewrite profile 7 RPU NALs through its
+profile 8.1 compatibility mode before VideoToolbox decode. Enhancement-layer
+NALs are dropped and the format description advertises a synthetic P8.1 dvvC
+atom so Apple can decode the compatible base layer through its native Dolby
+Vision path.
 
 The conversion mode is selected by PLEZY_DV_CONVERSION_MODE:
 auto/dv81 convert profile 7 to profile 8.1, hevc_strip drops only

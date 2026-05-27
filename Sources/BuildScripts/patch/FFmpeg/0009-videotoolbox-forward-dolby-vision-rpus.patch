@@ -13,9 +13,9 @@ frame is submitted to VideoToolbox. Profile 7 uses the same libdovi P8.1
 conversion path as the slice callback so raw P7 RPUs are never mixed into
 the synthetic P8.1 VideoToolbox session.
 ---
- libavcodec/videotoolbox.c | 49 +++++++++++++++++++++++++++++++++++-
+ libavcodec/videotoolbox.c | 47 ++++++++++++++++++++++++++++++++++++++++++++-
  libavcodec/vt_internal.h  |  3 +++
- 2 files changed, 51 insertions(+), 1 deletion(-)
+ 2 files changed, 49 insertions(+), 1 deletion(-)
 
 diff --git a/libavcodec/vt_internal.h b/libavcodec/vt_internal.h
 --- a/libavcodec/vt_internal.h
@@ -34,7 +34,7 @@ diff --git a/libavcodec/vt_internal.h b/libavcodec/vt_internal.h
 diff --git a/libavcodec/videotoolbox.c b/libavcodec/videotoolbox.c
 --- a/libavcodec/videotoolbox.c
 +++ b/libavcodec/videotoolbox.c
-@@ -1483,6 +1483,50 @@ static int videotoolbox_hevc_decode_slice(AVCodecContext *avctx,
+@@ -1483,6 +1483,49 @@ static int videotoolbox_hevc_decode_slice(AVCodecContext *avctx,
      return videotoolbox_common_decode_slice(avctx, buffer, size);
  }
  
@@ -53,8 +53,7 @@ diff --git a/libavcodec/videotoolbox.c b/libavcodec/videotoolbox.c
 +        H2645NAL *nal = &h->pkt.nals[i];
 +        int ret;
 +
-+        if (nal->type != HEVC_NAL_UNSPEC62 || nal->raw_size <= 2 ||
-+            nal->nuh_layer_id || nal->temporal_id)
++        if (nal->type != HEVC_NAL_UNSPEC62 || nal->raw_size <= 2)
 +            continue;
 +
 +        ret = convert_p7 ?
@@ -85,7 +84,7 @@ diff --git a/libavcodec/videotoolbox.c b/libavcodec/videotoolbox.c
  
  static int videotoolbox_hevc_decode_params(AVCodecContext *avctx,
                                             int type,
-@@ -1498,7 +1535,9 @@ static int videotoolbox_hevc_end_frame(AVCodecContext *avctx)
+@@ -1498,7 +1534,9 @@ static int videotoolbox_hevc_end_frame(AVCodecContext *avctx)
      VTContext *vtctx = avctx->internal->hwaccel_priv_data;
      int ret;
  
