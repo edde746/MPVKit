@@ -119,8 +119,23 @@ class BaseBuild {
     }
 
     func beforeBuild() throws {
+        let patchFiles = try patchFileURLs()
+        let expectedPatchState = patchFiles.isEmpty ? nil : try makePatchState(patchFiles: patchFiles)
+        let patchStateFile = patchStateURL()
+
         if FileManager.default.fileExists(atPath: directoryURL.path) {
-            return 
+            guard let expectedPatchState else {
+                return
+            }
+
+            let currentPatchState = try? String(contentsOf: patchStateFile, encoding: .utf8)
+            if currentPatchState == expectedPatchState {
+                return
+            }
+
+            print("Patch cache changed for \(library.rawValue); refreshing source checkout")
+            try FileManager.default.removeItem(at: directoryURL)
+            try? FileManager.default.removeItem(at: patchStateFile)
         }
 
         // pull code from git
@@ -130,18 +145,51 @@ class BaseBuild {
             try! Utility.launch(path: "/usr/bin/git", arguments: ["-c", "advice.detachedHead=false", "clone", "--recursive", "--depth", "1", "--branch", library.version, library.url, directoryURL.path])
         }
 
-        // apply patch
-        let patch = URL.currentDirectory + "../Sources/BuildScripts/patch/\(library.rawValue)"
-        if FileManager.default.fileExists(atPath: patch.path) {
-            _ = try? Utility.launch(path: "/usr/bin/git", arguments: ["checkout", "."], currentDirectoryURL: directoryURL)
-            let fileNames = try! FileManager.default.contentsOfDirectory(atPath: patch.path).sorted()
-            for fileName in fileNames {
-                if !fileName.hasSuffix(".patch") {
-                    continue
-                }
-                try! Utility.launch(path: "/usr/bin/git", arguments: ["apply", "\((patch + fileName).path)"], currentDirectoryURL: directoryURL)
-            }
+        for patchFile in patchFiles {
+            try! Utility.launch(path: "/usr/bin/git", arguments: ["apply", patchFile.path], currentDirectoryURL: directoryURL)
         }
+
+        if let expectedPatchState {
+            try expectedPatchState.write(to: patchStateFile, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func patchDirectoryURL() -> URL {
+        URL.currentDirectory + "../Sources/BuildScripts/patch/\(library.rawValue)"
+    }
+
+    private func patchStateURL() -> URL {
+        directoryURL.appendingPathExtension("patch-state")
+    }
+
+    private func patchFileURLs() throws -> [URL] {
+        let patchDirectory = patchDirectoryURL()
+        guard FileManager.default.fileExists(atPath: patchDirectory.path) else {
+            return []
+        }
+
+        return try FileManager.default.contentsOfDirectory(atPath: patchDirectory.path)
+            .filter { $0.hasSuffix(".patch") }
+            .sorted()
+            .map { patchDirectory + $0 }
+    }
+
+    private func makePatchState(patchFiles: [URL]) throws -> String {
+        var state = ""
+        state += "library=\(library.rawValue)\n"
+        state += "version=\(library.version)\n"
+        state += "url=\(library.url)\n"
+        state += "pullLatestVersion=\(pullLatestVersion)\n"
+
+        for patchFile in patchFiles {
+            let data = try Data(contentsOf: patchFile)
+            state += "patch=\(patchFile.lastPathComponent)\n"
+            state += "bytes=\(data.count)\n"
+            state += data.base64EncodedString(options: [.lineLength64Characters])
+            state += "\n"
+        }
+
+        return state
     }
 
     func buildALL() throws {
