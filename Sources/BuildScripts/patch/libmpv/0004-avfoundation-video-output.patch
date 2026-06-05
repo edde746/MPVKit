@@ -77,7 +77,7 @@ new file mode 100644
 index 0000000000..1b3e13aece
 --- /dev/null
 +++ b/video/out/vo_avfoundation.m
-@@ -0,0 +1,2666 @@
+@@ -0,0 +1,2700 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -954,6 +954,36 @@ index 0000000000..1b3e13aece
 +    }
 +    if (primaries || transfer || matrix)
 +        set_colorspace_from_attachments(pixbuf);
++}
++
++static void tag_pixel_buffer_pixel_aspect(struct vo *vo, CVPixelBufferRef pixbuf)
++{
++    if (!pixbuf || !vo->params)
++        return;
++
++    int p_w = vo->params->p_w;
++    int p_h = vo->params->p_h;
++    size_t bw = CVPixelBufferGetWidth(pixbuf);
++    size_t bh = CVPixelBufferGetHeight(pixbuf);
++
++    // Only coded-size passthrough/upload buffers need the source sample aspect
++    // ratio. Geometry- and composite-rendered buffers are already display-shaped
++    // (letterboxed via vo_get_src_dst_rects) and must stay square pixels to avoid
++    // double-correcting the aspect.
++    bool coded_size = bw == (size_t)vo->params->w && bh == (size_t)vo->params->h;
++
++    if (coded_size && p_w > 0 && p_h > 0 && p_w != p_h) {
++        NSDictionary *par = @{
++            (id)kCVImageBufferPixelAspectRatioHorizontalSpacingKey: @(p_w),
++            (id)kCVImageBufferPixelAspectRatioVerticalSpacingKey: @(p_h)
++        };
++        CVBufferSetAttachment(pixbuf, kCVImageBufferPixelAspectRatioKey,
++                              (__bridge CFDictionaryRef)par,
++                              kCVAttachmentMode_ShouldPropagate);
++    } else {
++        // Square pixels (or a reused pool buffer): strip any stale attachment.
++        CVBufferRemoveAttachment(pixbuf, kCVImageBufferPixelAspectRatioKey);
++    }
 +}
 +
 +static void copy_pixel_buffer_attachment(CVBufferRef src, CVBufferRef dst,
@@ -2391,6 +2421,10 @@ index 0000000000..1b3e13aece
 +            .duration = kCMTimeInvalid,
 +            .decodeTimeStamp = kCMTimeInvalid
 +        };
++
++        // DVD/anamorphic sources carry their display aspect in the sample aspect
++        // ratio; AVSampleBufferDisplayLayer only honors it via a buffer attachment.
++        tag_pixel_buffer_pixel_aspect(vo, finalBuffer);
 +
 +        CMSampleBufferRef buf = NULL;
 +        CMFormatDescriptionRef format = NULL;
