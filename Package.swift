@@ -140,38 +140,38 @@ let package = Package(
 
         .binaryTarget(
             name: "Libavcodec",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libavcodec.xcframework.zip",
-            checksum: "7c90f4642567930d136e2b68aec231f95e62f1fa4f123c90394ebe8fda80304b"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavcodec.xcframework.zip",
+            checksum: "3ad4b3140542d30dde5b7e2302c97177e66a24cc0ddab83dca5a2bbf9a307340"
         ),
         .binaryTarget(
             name: "Libavdevice",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libavdevice.xcframework.zip",
-            checksum: "678e6284de3ba4dd02e676375f74739828adf61928a9c367fe00a5d615c163ab"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavdevice.xcframework.zip",
+            checksum: "2a745cb9fe471c3165ad66de9ecf65a82692e8cae250be8c5346989f0d482b5a"
         ),
         .binaryTarget(
             name: "Libavformat",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libavformat.xcframework.zip",
-            checksum: "72d3531a99d6f716f7f4ef831096525bcabbd79415e6dbb4d3d5325275731d08"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavformat.xcframework.zip",
+            checksum: "3a136c9d98a3161c52715a8a943a9ee32b8fcc781c1a8e42196b2926b90fc325"
         ),
         .binaryTarget(
             name: "Libavfilter",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libavfilter.xcframework.zip",
-            checksum: "6bcf5e7d6b511470e06b4b5fa3c7bb0cb3a3d757dfa502fa18b0380f3401bcd2"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavfilter.xcframework.zip",
+            checksum: "689048cd63a5614ef7f259145c075d16943b3a847ad82c3d6cb29dce5ab8f183"
         ),
         .binaryTarget(
             name: "Libavutil",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libavutil.xcframework.zip",
-            checksum: "77dbc663299cbaf12084e8d99ec7fdf0725f527ad01e6bb1f8b2a5162f8215d4"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavutil.xcframework.zip",
+            checksum: "dea3cd8712db9e193d87f4349e7fb2bb9035ccd409bf3f196dd6333578a6ed28"
         ),
         .binaryTarget(
             name: "Libswresample",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libswresample.xcframework.zip",
-            checksum: "d73da7243583646b50c5470c7520fea5aa4430782b80a7ab50226d63d3ba0b13"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libswresample.xcframework.zip",
+            checksum: "3d59c95635c670bb234ce0fb75572bacf7b86bf8bb6e0c504aca21ccdf511119"
         ),
         .binaryTarget(
             name: "Libswscale",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libswscale.xcframework.zip",
-            checksum: "af9285e4f48c8f61072ccd2ce1bb7060a61b78f46fdc2d3cf1bcc275aa1530c2"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libswscale.xcframework.zip",
+            checksum: "48bb8b93d12b3c8e86c558509766cc8fb55c3ff21e1ee8f07400740ccf51a0a9"
         ),
 
         .binaryTarget(
@@ -188,8 +188,8 @@ let package = Package(
 
         .binaryTarget(
             name: "Libmpv",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom/Libmpv.xcframework.zip",
-            checksum: "0d43b994bd5e7ba75f850062e4317eeaa8d08a9aa16d39265279846c5b8aaa03"
+            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libmpv.xcframework.zip",
+            checksum: "586fdafd20919aa16bdbf20d26550ccc9c12a0ec226b1d679d8288b06cb26ff1"
         ),
         //AUTO_GENERATE_TARGETS_END//
     ]
