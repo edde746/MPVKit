@@ -233,7 +233,7 @@ jobs:
       - name: Upload binary to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ contains(needs.metadata.outputs.release_version, '-') && needs.metadata.outputs.release_version || needs.metadata.outputs.build_version }}
+          name: ${{ needs.metadata.outputs.release_version }}
           tag_name: ${{ needs.metadata.outputs.release_version }}
           files: |
             ./dist/release/*.txt
