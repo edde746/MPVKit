@@ -140,38 +140,38 @@ let package = Package(
 
         .binaryTarget(
             name: "Libavcodec",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavcodec.xcframework.zip",
-            checksum: "3ad4b3140542d30dde5b7e2302c97177e66a24cc0ddab83dca5a2bbf9a307340"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libavcodec.xcframework.zip",
+            checksum: "1c273f4933ac1e0c39acdc85d69f85e634f6d0098b1ba92305213e56724984f0"
         ),
         .binaryTarget(
             name: "Libavdevice",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavdevice.xcframework.zip",
-            checksum: "2a745cb9fe471c3165ad66de9ecf65a82692e8cae250be8c5346989f0d482b5a"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libavdevice.xcframework.zip",
+            checksum: "48acbb8f9ae6c312d623ce56db68ee1c4c6c33971e0097a140002a33a34046f6"
         ),
         .binaryTarget(
             name: "Libavformat",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavformat.xcframework.zip",
-            checksum: "3a136c9d98a3161c52715a8a943a9ee32b8fcc781c1a8e42196b2926b90fc325"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libavformat.xcframework.zip",
+            checksum: "3c71c0ebcd9ea3c6400a66aa84d28ffb2323380518f905f0ea26d75034653a6f"
         ),
         .binaryTarget(
             name: "Libavfilter",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavfilter.xcframework.zip",
-            checksum: "689048cd63a5614ef7f259145c075d16943b3a847ad82c3d6cb29dce5ab8f183"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libavfilter.xcframework.zip",
+            checksum: "a642d5225bcfe51351d8507611ff9f96986d314acb29f1f5e816f0761296ffca"
         ),
         .binaryTarget(
             name: "Libavutil",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libavutil.xcframework.zip",
-            checksum: "dea3cd8712db9e193d87f4349e7fb2bb9035ccd409bf3f196dd6333578a6ed28"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libavutil.xcframework.zip",
+            checksum: "9d732571affa12367d39e5496874fb3f4ad50e313ccec4277f84b1bb36ade128"
         ),
         .binaryTarget(
             name: "Libswresample",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libswresample.xcframework.zip",
-            checksum: "3d59c95635c670bb234ce0fb75572bacf7b86bf8bb6e0c504aca21ccdf511119"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libswresample.xcframework.zip",
+            checksum: "1c5d6613d80cef0303c05e09a49597f343bb9658d2c9f9c4552d810df3f7d729"
         ),
         .binaryTarget(
             name: "Libswscale",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libswscale.xcframework.zip",
-            checksum: "48bb8b93d12b3c8e86c558509766cc8fb55c3ff21e1ee8f07400740ccf51a0a9"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libswscale.xcframework.zip",
+            checksum: "ca6c6ec546afedce956d3ca97118f2feff548a2ebe9d5b623019f7e4e5f09b29"
         ),
 
         .binaryTarget(
@@ -188,8 +188,8 @@ let package = Package(
 
         .binaryTarget(
             name: "Libmpv",
-            url: "https://github.com/edde746/MPVKit/releases/download/avfoundation-dv7-p8-lua-hevc-strip-rpu-zoom-par/Libmpv.xcframework.zip",
-            checksum: "586fdafd20919aa16bdbf20d26550ccc9c12a0ec226b1d679d8288b06cb26ff1"
+            url: "https://github.com/edde746/MPVKit/releases/download/v1.0.0/Libmpv.xcframework.zip",
+            checksum: "7419f7e1657c748d2aa69662fb2e8aa7c4b0abea63d868862e2645ee25271e12"
         ),
         //AUTO_GENERATE_TARGETS_END//
     ]
