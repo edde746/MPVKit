@@ -56,8 +56,8 @@ index ccba249..3c4b321 100644
 +    case 5:
 +        return 1;
 +    case 8:
-+        return dovi->dv_bl_signal_compatibility_id == 1 ||
-+               dovi->dv_bl_signal_compatibility_id == 4;
++        /* Apple decodes all single-layer profile 8 DV; don't gate on compat id. */
++        return 1;
 +    default:
 +        return 0;
 +    }
