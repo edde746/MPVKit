@@ -82,8 +82,7 @@ enum Library: String, CaseIterable {
         case .FFmpeg:
             return "https://github.com/FFmpeg/FFmpeg"
         case .libass:
-            return
-                "https://github.com/mpvkit/libass-build/releases/download/\(self.version)/libass-all.zip"
+            return "https://github.com/libass/libass"
         case .libunibreak:
             return
                 "https://github.com/mpvkit/libass-build/releases/download/\(self.version)/libunibreak-all.zip"
@@ -191,9 +190,8 @@ enum Library: String, CaseIterable {
                 .target(
                     name: "Libass",
                     url:
-                        "https://github.com/mpvkit/libass-build/releases/download/\(self.version)/Libass.xcframework.zip",
-                    checksum:
-                        "https://github.com/mpvkit/libass-build/releases/download/\(self.version)/Libass.xcframework.checksum.txt"
+                        "https://github.com/edde746/MPVKit/releases/download/\(BaseBuild.options.releaseVersion)/Libass.xcframework.zip",
+                    checksum: ""
                 )
             ]
         case .libunibreak:
@@ -702,9 +700,27 @@ private class BuildPlacebo: ZipBaseBuild {
     }
 }
 
-private class BuildASS: ZipBaseBuild {
+private class BuildASS: BaseBuild {
     init() {
         super.init(library: .libass)
+    }
+
+    override func arguments(platform: PlatformType, arch: ArchType) -> [String] {
+        // AArch64 asm assembles with clang; x86 asm would need nasm, so keep
+        // SIMD to the arm64 slices (mirrors the FFmpeg asm policy).
+        let asm = arch == .arm64 || arch == .arm64e
+        return [
+            "-Dasm=\(asm ? "enabled" : "disabled")",
+            "-Dlibunibreak=enabled",
+            "-Dcoretext=enabled",
+            "-Dfontconfig=disabled",
+            "-Ddirectwrite=disabled",
+            "-Dcheckasm=disabled",
+            "-Dtest=disabled",
+            "-Dprofile=disabled",
+            "-Dcompare=disabled",
+            "-Dfuzz=disabled",
+        ]
     }
 }
 
