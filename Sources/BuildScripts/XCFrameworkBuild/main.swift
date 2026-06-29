@@ -43,15 +43,15 @@ enum Library: String, CaseIterable {
         case .FFmpeg:
             return "n8.0.1"
         case .libass:
-            return "0.17.4"
+            return "0.17.5"
         case .libunibreak:
-            return "0.17.4"
+            return "0.17.5"
         case .libfreetype:
-            return "0.17.4"
+            return "0.17.5"
         case .libfribidi:
-            return "0.17.4"
+            return "0.17.5"
         case .libharfbuzz:
-            return "0.17.4"
+            return "0.17.5"
         case .libdav1d:    // AV1 decoding
             return "1.5.2-xcode"
         case .lcms2:
