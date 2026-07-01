@@ -43,7 +43,7 @@ enum Library: String, CaseIterable {
         case .FFmpeg:
             return "n8.0.1"
         case .libass:
-            return "0.17.4"
+            return "0.18.2"
         case .libunibreak:
             return "0.17.4"
         case .libfreetype:
@@ -82,7 +82,7 @@ enum Library: String, CaseIterable {
         case .FFmpeg:
             return "https://github.com/FFmpeg/FFmpeg"
         case .libass:
-            return "https://github.com/libass/libass"
+            return "https://github.com/edde746/libass"
         case .libunibreak:
             return
                 "https://github.com/mpvkit/libass-build/releases/download/\(self.version)/libunibreak-all.zip"
