@@ -1,0 +1,689 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index f8df0ee..2a04ea7 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -22,9 +22,13 @@
+ #include "common/common.h"
+ #include "common/msg.h"
+ #include "internal.h"
++#include "options/m_option.h"
+ #include "osdep/timer.h"
+ #include "ta/ta_talloc.h"
+ 
++#include <errno.h>
++#include <libavcodec/ac3_parser.h>
++
+ #import <AVFoundation/AVFoundation.h>
+ #import <Foundation/Foundation.h>
+ #import <CoreAudioTypes/CoreAudioTypes.h>
+@@ -36,8 +40,11 @@ @interface AVObserver : NSObject {
+     struct ao *ao;
+ }
+ - (void)handleRestartNotification:(NSNotification*)notification;
++- (void)handleRouteChangeNotification:(NSNotification*)notification;
+ @end
+ 
++@class PlezyEc3Sink;
++
+ struct priv {
+     AVSampleBufferAudioRenderer *renderer;
+     AVSampleBufferRenderSynchronizer *synchronizer;
+@@ -55,6 +62,16 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     int stash_len;
+     int stash_size;
+     int64_t next_burst_pts;  // PTS (ns) of the next burst to enqueue; -1 = unset
++    // AVPlayer Atmos sink (EAC3+JOC only): AVSampleBufferAudioRenderer
++    // decodes the EAC3 core and drops the JOC objects, so JOC streams are
++    // rerouted to a hidden AVPlayer, the only API that feeds the system's
++    // Dolby MAT encoder. The raw elementary stream keeps JOC in-band.
++    bool avsink;             // AVPlayer sink engaged for this AO
++    bool spdif_probed;       // JOC probe ran on the first burst
++    bool paused;
++    PlezyEc3Sink *ec3_sink;
++    int opt_atmos;           // 0 = never engage the AVPlayer sink
++    int opt_atmos_min_channels;
+ };
+ 
+ #define IEC61937_HEADER_SIZE 8
+@@ -97,6 +114,416 @@ static void spdif_reload(struct ao *ao)
+     ao_request_reload(ao);
+ }
+ 
++// ---------------------------------------------------------------------------
++// AVPlayer Atmos sink
++//
++// A hidden AVPlayer is handed the raw EAC3 elementary stream through an
++// AVAssetResourceLoader on a custom URL scheme. AVPlayer probes the raw ES,
++// detects the JOC extension, and drives the on-device Dolby MAT 2.0 encoder
++// so an Atmos-capable HDMI route receives object audio. mpv keeps producing
++// the stream through the normal spdif path; only the terminal sink differs.
++// The sink clock (AVPlayerItem's timebase) is folded into the ao_read_data
++// deadline, so the core's A/V sync chases AVPlayer like any other device.
++// ---------------------------------------------------------------------------
++
++static void feed_spdif(struct ao *ao);
++static void avsink_fail(struct ao *ao, const char *why);
++
++// Once AVPlayer rejects the stream (or never becomes ready), fall back to
++// the AVSampleBufferAudioRenderer path for the rest of the process: it
++// still yields correct multichannel PCM of the EAC3 core.
++static bool avsink_latch;
++
++#define AVSINK_TICK_NS       (50 * INT64_C(1000000))   // feed timer period
++#define AVSINK_PREROLL_NS    (500 * INT64_C(1000000))  // buffered before playback starts
++#define AVSINK_READY_GRACE_NS (3 * INT64_C(1000000000)) // preroll-to-ready watchdog
++#define AVSINK_FEED_AHEAD_NS (4 * INT64_C(1000000000)) // max buffered ahead of the item clock
++#define AVSINK_KEEP_BEHIND   (8 * 1024 * 1024)         // served bytes retained for re-reads
++
++@interface PlezyEc3Sink : NSObject <AVAssetResourceLoaderDelegate> {
++@public
++    struct ao *ao;
++    AVPlayer *player;
++    AVPlayerItem *item;
++    AVURLAsset *asset;
++    dispatch_queue_t queue;         // == p->queue (retained)
++    dispatch_source_t timer;
++    NSMutableArray *requests;       // pending AVAssetResourceLoadingRequest
++    NSMutableData *window;          // trailing window of the appended stream
++    uint64_t window_start;          // absolute offset of window's first byte
++    uint64_t bytes_appended;
++    uint64_t bursts_appended;
++    uint64_t generation;
++    int64_t ready_deadline;         // mp time; 0 = not armed
++    int64_t latency_ns;             // AVAudioSession output latency
++    bool started;                   // playImmediatelyAtRate happened
++    bool eofed;
++}
++@end
++
++@implementation PlezyEc3Sink
++
++- (instancetype)initWithAO:(struct ao *)_ao queue:(dispatch_queue_t)_queue
++{
++    self = [super init];
++    if (self) {
++        ao = _ao;
++        queue = _queue;
++        dispatch_retain(queue);
++        requests = [[NSMutableArray alloc] init];
++        window = [[NSMutableData alloc] init];
++    }
++    return self;
++}
++
++- (void)dealloc
++{
++    [requests release];
++    [window release];
++    dispatch_release(queue);
++    [super dealloc];
++}
++
++// Serve every pending loading request from the window. Runs on `queue`.
++- (void)servePending
++{
++  @autoreleasepool {
++    for (NSUInteger i = 0; i < requests.count;) {
++        AVAssetResourceLoadingRequest *req = [requests objectAtIndex:i];
++        AVAssetResourceLoadingDataRequest *dr = req.dataRequest;
++        if (!dr) {
++            [req finishLoading];
++            [requests removeObjectAtIndex:i];
++            continue;
++        }
++        uint64_t off = (uint64_t)dr.currentOffset;
++        uint64_t end = (uint64_t)dr.requestedOffset + (uint64_t)dr.requestedLength;
++        if (off < window_start) {
++            // Fell out of the retained window: raw audio readers consume
++            // sequentially, so a far-backward re-read means AVPlayer is
++            // doing something the sink cannot support.
++            MP_WARN(ao, "avplayer sink: request for evicted offset %llu (window %llu+%lu)\n",
++                    (unsigned long long)off, (unsigned long long)window_start,
++                    (unsigned long)window.length);
++            [req finishLoadingWithError:[NSError errorWithDomain:NSPOSIXErrorDomain
++                                                            code:ESPIPE userInfo:nil]];
++            [requests removeObjectAtIndex:i];
++            avsink_fail(ao, "unsupported byte-range request");
++            return;
++        }
++        uint64_t head = window_start + window.length;
++        if (off < head) {
++            uint64_t avail = MPMIN(head, end) - off;
++            [dr respondWithData:[window subdataWithRange:
++                NSMakeRange((NSUInteger)(off - window_start), (NSUInteger)avail)]];
++        }
++        if ((uint64_t)dr.currentOffset >= end) {
++            [req finishLoading];
++            [requests removeObjectAtIndex:i];
++            continue;
++        }
++        // rest of the request waits for more appended data (or EOF teardown)
++        i++;
++    }
++
++    // trim the window, keeping a re-read margin behind the lowest reader
++    uint64_t low = bytes_appended;
++    for (AVAssetResourceLoadingRequest *req in requests) {
++        if (req.dataRequest)
++            low = MPMIN(low, (uint64_t)req.dataRequest.currentOffset);
++    }
++    if (low - window_start > AVSINK_KEEP_BEHIND) {
++        uint64_t trim = low - window_start - AVSINK_KEEP_BEHIND;
++        [window replaceBytesInRange:NSMakeRange(0, (NSUInteger)trim)
++                          withBytes:NULL length:0];
++        window_start += trim;
++    }
++  }
++}
++
++- (void)appendData:(const uint8_t *)data length:(int)length
++{
++    [window appendBytes:data length:length];
++    bytes_appended += length;
++    [self servePending];
++}
++
++- (BOOL)resourceLoader:(AVAssetResourceLoader *)resourceLoader
++        shouldWaitForLoadingOfRequestedResource:(AVAssetResourceLoadingRequest *)loadingRequest
++{
++  @autoreleasepool {
++    AVAssetResourceLoadingContentInformationRequest *info = loadingRequest.contentInformationRequest;
++    if (info) {
++        info.contentType = @"public.enhanced-ac3-audio";
++        // Arbitrarily large: the stream length is unknown while playing.
++        // mpv seeks tear the whole item down, so the value is never reached.
++        info.contentLength = INT64_C(1) << 40;
++        info.byteRangeAccessSupported = YES;
++    }
++    if (loadingRequest.dataRequest) {
++        [requests addObject:loadingRequest];
++        [self servePending];
++    } else {
++        [loadingRequest finishLoading];
++    }
++    return YES;
++  }
++}
++
++- (void)resourceLoader:(AVAssetResourceLoader *)resourceLoader
++        didCancelLoadingRequest:(AVAssetResourceLoadingRequest *)loadingRequest
++{
++    [requests removeObjectIdenticalTo:loadingRequest];
++}
++
++@end
++
++// The route can only carry object audio when the system opens it wider than
++// plain PCM 7.1 (Dolby MAT eARC links report 16+); narrower routes (TV
++// speakers, Bluetooth, AirPods) hard-fail or downmix a JOC item, so they
++// stay on the proven renderer path.
++static bool avsink_route_allows(struct ao *ao)
++{
++#if TARGET_OS_IPHONE
++    struct priv *p = ao->priv;
++    NSInteger max_channels = AVAudioSession.sharedInstance.maximumOutputNumberOfChannels;
++    return max_channels > p->opt_atmos_min_channels;
++#else
++    return false;
++#endif
++}
++
++static int64_t avsink_media_fed_ns(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    return CMTimeGetNanoseconds(CMTimeMake(
++        p->ec3_sink->bursts_appended * SPDIF_FRAMES_PER_BURST, p->spdif_rate));
++}
++
++static int64_t avsink_item_time_ns(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    CMTimebaseRef timebase = [p->ec3_sink->item timebase];
++    if (!timebase)
++        return 0;
++    int64_t t = CMTimeGetNanoseconds(CMTimebaseGetTime(timebase));
++    return MPCLAMP(t, 0, avsink_media_fed_ns(ao));
++}
++
++// mp time at which the last sample of a `samples`-long read will play.
++static int64_t avsink_out_time(struct ao *ao, int samples)
++{
++    struct priv *p = ao->priv;
++    int64_t queued = avsink_media_fed_ns(ao) - avsink_item_time_ns(ao);
++    int64_t duration = CMTimeGetNanoseconds(CMTimeMake(samples, ao->samplerate));
++    return mp_time_ns() + queued + p->ec3_sink->latency_ns + duration;
++}
++
++static void avsink_teardown_item(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    PlezyEc3Sink *sink = p->ec3_sink;
++    if (!sink)
++        return;
++
++  @autoreleasepool {
++    [sink->player replaceCurrentItemWithPlayerItem:nil];
++    for (AVAssetResourceLoadingRequest *req in sink->requests) {
++        if (!req.finished)
++            [req finishLoadingWithError:[NSError errorWithDomain:NSURLErrorDomain
++                                                            code:NSURLErrorCancelled userInfo:nil]];
++    }
++    [sink->requests removeAllObjects];
++    [sink->asset.resourceLoader setDelegate:nil queue:NULL];
++    [sink->asset release];
++    [sink->item release];
++    sink->asset = nil;
++    sink->item = nil;
++    [sink->window setLength:0];
++    sink->window_start = 0;
++    sink->bytes_appended = 0;
++    sink->bursts_appended = 0;
++    sink->ready_deadline = 0;
++    sink->started = false;
++    sink->eofed = false;
++  }
++}
++
++// Build a fresh asset/item generation and leave it prerolling; playback
++// starts from the feed timer once enough of the stream is buffered.
++static void avsink_arm_item(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    PlezyEc3Sink *sink = p->ec3_sink;
++
++  @autoreleasepool {
++    sink->generation++;
++    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:
++        @"plezy-ec3://sink/%llu/audio.ec3", (unsigned long long)sink->generation]];
++    sink->asset = [[AVURLAsset alloc] initWithURL:url options:nil];
++    [sink->asset.resourceLoader setDelegate:sink queue:sink->queue];
++    sink->item = [[AVPlayerItem alloc] initWithAsset:sink->asset];
++    sink->item.preferredForwardBufferDuration = 1.0;
++    [sink->player replaceCurrentItemWithPlayerItem:sink->item];
++#if TARGET_OS_IPHONE
++    sink->latency_ns = (int64_t)(AVAudioSession.sharedInstance.outputLatency * 1e9);
++#endif
++  }
++}
++
++static void avsink_fail(struct ao *ao, const char *why)
++{
++    struct priv *p = ao->priv;
++
++    MP_ERR(ao, "avplayer sink: %s; falling back to the system renderer\n", why);
++    avsink_latch = true;
++    if (p->ec3_sink && p->ec3_sink->timer)
++        dispatch_source_cancel(p->ec3_sink->timer);
++    ao_request_reload(ao);
++}
++
++// Runs on p->queue every AVSINK_TICK_NS while the sink is engaged.
++static void avsink_tick(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    PlezyEc3Sink *sink = p->ec3_sink;
++
++    if (!p->avsink || !sink->item)
++        return;
++
++    if (sink->item.status == AVPlayerItemStatusFailed) {
++        NSError *error = sink->item.error;
++        MP_ERR(ao, "avplayer sink: item failed: %s (%s:%ld)\n",
++               error ? [[error localizedDescription] UTF8String] : "unknown",
++               error ? [[error domain] UTF8String] : "-",
++               error ? (long)[error code] : 0);
++        avsink_fail(ao, "playback item failed");
++        return;
++    }
++
++    // pull more of the stream unless far enough ahead of the item clock
++    if (!sink->eofed && !p->paused) {
++        for (int i = 0; i < 8; i++) {
++            int64_t ahead = avsink_media_fed_ns(ao) - avsink_item_time_ns(ao);
++            if (ahead >= (sink->started ? AVSINK_FEED_AHEAD_NS : AVSINK_PREROLL_NS * 2))
++                break;
++            uint64_t before = sink->bytes_appended;
++            feed_spdif(ao);
++            if (!p->avsink || sink->bytes_appended == before)
++                break;
++        }
++    }
++
++    if (!p->avsink || !sink->item)
++        return; // feed may have failed the sink
++
++    if (!sink->started) {
++        bool prerolled = avsink_media_fed_ns(ao) >= AVSINK_PREROLL_NS || sink->eofed;
++        if (prerolled && !sink->ready_deadline)
++            sink->ready_deadline = mp_time_ns() + AVSINK_READY_GRACE_NS;
++        if (prerolled && sink->item.status == AVPlayerItemStatusReadyToPlay) {
++            if (!p->paused) {
++                [sink->player playImmediatelyAtRate:1.0];
++                sink->started = true;
++                MP_INFO(ao, "avplayer sink: playback started\n");
++            }
++        } else if (sink->ready_deadline && mp_time_ns() > sink->ready_deadline) {
++            avsink_fail(ao, "item never became ready");
++        }
++        return;
++    }
++
++    // recover from system interruptions: the item is fine but the player
++    // was paused behind our back
++    if (!p->paused && !sink->eofed &&
++        sink->player.timeControlStatus == AVPlayerTimeControlStatusPaused)
++        [sink->player playImmediatelyAtRate:1.0];
++}
++
++// Engage the sink before the first burst is enqueued: from here on the
++// renderer stays idle and the feed timer drives the stream into AVPlayer.
++static void avsink_engage(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++
++    PlezyEc3Sink *sink = [[PlezyEc3Sink alloc] initWithAO:ao queue:p->queue];
++    p->ec3_sink = sink;
++
++    sink->player = [[AVPlayer alloc] init];
++    sink->player.automaticallyWaitsToMinimizeStalling = NO;
++    sink->player.allowsExternalPlayback = NO;
++    sink->player.volume = p->renderer.volume;
++    sink->player.muted = p->renderer.muted;
++
++    [p->renderer stopRequestingMediaData];
++    [p->renderer flush];
++    p->avsink = true;
++
++    avsink_arm_item(ao);
++
++    sink->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, p->queue);
++    dispatch_source_set_timer(sink->timer, DISPATCH_TIME_NOW, AVSINK_TICK_NS, AVSINK_TICK_NS / 2);
++    dispatch_source_set_event_handler(sink->timer, ^{
++        @autoreleasepool {
++            avsink_tick(ao);
++        }
++    });
++    dispatch_resume(sink->timer);
++
++#if TARGET_OS_IPHONE
++    [[NSNotificationCenter defaultCenter] addObserver:p->observer
++        selector:@selector(handleRouteChangeNotification:)
++        name:AVAudioSessionRouteChangeNotification object:nil];
++#endif
++
++    MP_INFO(ao, "EAC3 JOC (Atmos) stream: routing through AVPlayer for Dolby MAT output\n");
++}
++
++static void avsink_destroy(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    PlezyEc3Sink *sink = p->ec3_sink;
++    if (!sink)
++        return;
++
++    if (sink->timer) {
++        dispatch_source_cancel(sink->timer);
++        dispatch_release(sink->timer);
++        sink->timer = NULL;
++    }
++    avsink_teardown_item(ao);
++    [sink->player release];
++    sink->player = nil;
++    [sink release];
++    p->ec3_sink = nil;
++    p->avsink = false;
++}
++
++// First-burst probe: a JOC stream signals extension type A in the BSI of
++// every independent frame, so one look at the first access unit suffices.
++static void avsink_maybe_engage(struct ao *ao, const uint8_t *frame, int size)
++{
++    struct priv *p = ao->priv;
++
++    if (!p->opt_atmos || ao->format != AF_FORMAT_S_EAC3)
++        return;
++    if (avsink_latch) {
++        MP_VERBOSE(ao, "avplayer sink disabled after an earlier failure\n");
++        return;
++    }
++    int joc = av_eac3_extension_type_a(frame, size);
++    if (joc < 0)
++        MP_WARN(ao, "failed to probe the EAC3 frame for JOC\n");
++    if (joc != 1)
++        return;
++    if (!avsink_route_allows(ao)) {
++        MP_INFO(ao, "EAC3 JOC (Atmos) stream, but the output route cannot "
++                "carry object audio; using the system renderer\n");
++        return;
++    }
++    avsink_engage(ao);
++}
++
+ static uint32_t spdif_get_bits(const uint8_t *buf, int offset, int n)
+ {
+     uint32_t v = 0;
+@@ -276,6 +703,19 @@ static bool spdif_enqueue_burst(struct ao *ao, const uint8_t *payload, int paylo
+         return false;
+     }
+ 
++    // decide the sink on the first complete access unit, before anything
++    // reaches the system renderer
++    if (!p->spdif_probed) {
++        p->spdif_probed = true;
++        avsink_maybe_engage(ao, data, payload_len);
++    }
++    if (p->avsink) {
++        [p->ec3_sink appendData:data length:payload_len];
++        p->ec3_sink->bursts_appended++;
++        CFAllocatorDeallocate(NULL, data);
++        return p->avsink; // appendData may have failed the sink
++    }
++
+     if ((err = CMBlockBufferCreateWithMemoryBlock(
+         NULL,
+         data,
+@@ -329,7 +769,7 @@ static void feed_spdif(struct ao *ao)
+     int samplerate = ao->samplerate;
+     int sstride = ao->sstride;
+ 
+-    if ([p->renderer status] == AVQueuedSampleBufferRenderingStatusFailed) {
++    if (!p->avsink && [p->renderer status] == AVQueuedSampleBufferRenderingStatusFailed) {
+         NSError *error = [p->renderer error];
+         MP_ERR(ao, "renderer failed to accept the compressed stream: %s (%s:%ld)\n",
+                error ? [[error localizedDescription] UTF8String] : "unknown",
+@@ -344,25 +784,37 @@ static void feed_spdif(struct ao *ao)
+     if ((p->stash_size - p->stash_len) / sstride < request_sample_count)
+         request_sample_count = (p->stash_size - p->stash_len) / sstride;
+ 
+-    int64_t cur_time_av = CMTimeGetNanoseconds([p->synchronizer currentTime]);
+-    int64_t cur_time_mp = mp_time_ns();
+-    int64_t end_time_av = MPMAX(p->end_time_av, cur_time_av);
++    int64_t cur_time_av = 0, cur_time_mp = 0, end_time_av = 0, out_time;
+     int64_t time_delta = CMTimeGetNanoseconds(CMTimeMake(request_sample_count, samplerate));
++    if (p->avsink) {
++        out_time = avsink_out_time(ao, request_sample_count);
++    } else {
++        cur_time_av = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++        cur_time_mp = mp_time_ns();
++        end_time_av = MPMAX(p->end_time_av, cur_time_av);
++        out_time = end_time_av - cur_time_av + cur_time_mp + time_delta;
++    }
+     bool eof;
+     void *data[] = {p->stash + p->stash_len};
+-    int real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
++    int real_sample_count = ao_read_data(ao, data, request_sample_count, out_time, &eof, false, true);
+     if (eof) {
+-        [p->renderer stopRequestingMediaData];
++        if (p->avsink) {
++            p->ec3_sink->eofed = true;
++        } else {
++            [p->renderer stopRequestingMediaData];
++        }
+         ao_stop_streaming(ao);
+     }
+     if (real_sample_count == 0)
+         return;
+ 
+     // keep the burst clock in lockstep with the read clock
+-    if (p->next_burst_pts < 0) {
+-        p->next_burst_pts = end_time_av;
+-    } else if (p->end_time_av >= 0 && end_time_av > p->end_time_av) {
+-        p->next_burst_pts += end_time_av - p->end_time_av;
++    if (!p->avsink) {
++        if (p->next_burst_pts < 0) {
++            p->next_burst_pts = end_time_av;
++        } else if (p->end_time_av >= 0 && end_time_av > p->end_time_av) {
++            p->next_burst_pts += end_time_av - p->end_time_av;
++        }
+     }
+     p->stash_len += real_sample_count * sstride;
+ 
+@@ -403,7 +855,8 @@ static void feed_spdif(struct ao *ao)
+         p->stash_len = 0;
+     }
+ 
+-    p->end_time_av = end_time_av + CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
++    if (!p->avsink)
++        p->end_time_av = end_time_av + CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+ }
+ 
+ static void feed(struct ao *ao)
+@@ -497,6 +950,15 @@ static void start(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
++    if (p->avsink) {
++        // a fresh item generation prerolls and starts from the feed timer
++        dispatch_sync(p->queue, ^{
++            if (!p->ec3_sink->item)
++                avsink_arm_item(ao);
++        });
++        return;
++    }
++
+     p->end_time_av = -1;
+     [p->synchronizer setRate:1];
+     [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
+@@ -509,6 +971,12 @@ static void stop(struct ao *ao)
+     struct priv *p = ao->priv;
+ 
+     dispatch_sync(p->queue, ^{
++        if (p->avsink) {
++            // AVPlayer cannot absorb a discontinuity mid-stream; drop the
++            // whole item and let start() preroll a fresh generation
++            [p->ec3_sink->player setRate:0];
++            avsink_teardown_item(ao);
++        }
+         [p->renderer stopRequestingMediaData];
+         [p->renderer flush];
+         [p->synchronizer setRate:0];
+@@ -521,6 +989,16 @@ static bool set_pause(struct ao *ao, bool paused)
+ {
+     struct priv *p = ao->priv;
+ 
++    p->paused = paused;
++    if (p->avsink) {
++        if (paused) {
++            [p->ec3_sink->player setRate:0];
++        } else if (p->ec3_sink->started) {
++            [p->ec3_sink->player playImmediatelyAtRate:1.0];
++        } // else the feed timer starts playback once prerolled
++        return true;
++    }
++
+     if (paused) {
+         [p->synchronizer setRate:0];
+     } else {
+@@ -534,6 +1012,26 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
+ {
+     struct priv *p = ao->priv;
+ 
++    if (p->avsink) {
++        AVPlayer *player = p->ec3_sink->player;
++        switch (cmd) {
++        case AOCONTROL_GET_MUTE:
++            *(bool*)arg = player.muted;
++            return CONTROL_OK;
++        case AOCONTROL_GET_VOLUME:
++            *(float*)arg = player.volume * 100;
++            return CONTROL_OK;
++        case AOCONTROL_SET_MUTE:
++            player.muted = *(bool*)arg;
++            return CONTROL_OK;
++        case AOCONTROL_SET_VOLUME:
++            player.volume = *(float*)arg / 100;
++            return CONTROL_OK;
++        default:
++            return CONTROL_UNKNOWN;
++        }
++    }
++
+     switch (cmd) {
+     case AOCONTROL_GET_MUTE:
+         *(bool*)arg = [p->renderer isMuted];
+@@ -568,6 +1066,28 @@ - (void)handleRestartNotification:(NSNotification*)notification {
+     stop(ao);
+     start(ao);
+ }
++- (void)handleRouteChangeNotification:(NSNotification*)notification {
++    struct ao *_ao = ao;
++    struct priv *p = _ao->priv;
++    // registered only while the AVPlayer sink is engaged; uninit drains the
++    // queue after removing the observer, so _ao stays valid inside the block
++    dispatch_async(p->queue, ^{
++        if (!p->avsink)
++            return;
++        if (!avsink_route_allows(_ao)) {
++            // a JOC item can hard-fail on routes that cannot carry object
++            // audio (e.g. Bluetooth); proactively reinit onto the renderer
++            // path instead of waiting for the failure
++            MP_WARN(_ao, "audio route can no longer carry Atmos; reloading\n");
++            ao_request_reload(_ao);
++        } else {
++#if TARGET_OS_IPHONE
++            p->ec3_sink->latency_ns =
++                (int64_t)(AVAudioSession.sharedInstance.outputLatency * 1e9);
++#endif
++        }
++    });
++}
+ @end
+ 
+ static int init(struct ao *ao)
+@@ -744,14 +1264,20 @@ static void uninit(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
++    // stop observing before the queue drains so no notification block can
++    // outlive the AO
++    [[NSNotificationCenter defaultCenter] removeObserver:p->observer];
++
+     stop(ao);
++    dispatch_sync(p->queue, ^{
++        avsink_destroy(ao);
++    });
+ 
+     [p->renderer release];
+     [p->synchronizer release];
+     dispatch_release(p->queue);
+     CFRelease(p->format_description);
+ 
+-    [[NSNotificationCenter defaultCenter] removeObserver:p->observer];
+     [p->observer release];
+ 
+ #if TARGET_OS_IPHONE
+@@ -775,4 +1301,14 @@ static void uninit(struct ao *ao)
+     .set_pause      = set_pause,
+     .list_devs      = ca_get_device_list,
+     .priv_size      = sizeof(struct priv),
++    .priv_defaults  = &(const struct priv){
++        .opt_atmos = 1,
++        .opt_atmos_min_channels = 8,
++    },
++    .options = (const struct m_option[]) {
++        {"atmos", OPT_CHOICE(opt_atmos, {"no", 0}, {"auto", 1})},
++        {"atmos-min-channels", OPT_INT(opt_atmos_min_channels), M_RANGE(2, 64)},
++        {0}
++    },
++    .options_prefix = "ao-avfoundation",
+ };

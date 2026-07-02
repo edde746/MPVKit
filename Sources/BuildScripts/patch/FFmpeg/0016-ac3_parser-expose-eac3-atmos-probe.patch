@@ -1,0 +1,61 @@
+diff --git a/libavcodec/ac3_parser.c b/libavcodec/ac3_parser.c
+index a8bc3af..9c4637b 100644
+--- a/libavcodec/ac3_parser.c
++++ b/libavcodec/ac3_parser.c
+@@ -440,6 +440,25 @@ int av_ac3_parse_header(const uint8_t *buf, size_t size,
+     return 0;
+ }
+ 
++int av_eac3_extension_type_a(const uint8_t *buf, size_t size)
++{
++    GetBitContext gb;
++    AC3HeaderInfo hdr;
++    int err;
++
++    /* The flag sits in addbsi at the tail of the variable-length BSI, so
++     * parse the whole syncframe instead of av_ac3_parse_header()'s 32-byte
++     * prefix. */
++    err = init_get_bits8(&gb, buf, size);
++    if (err < 0)
++        return AVERROR_INVALIDDATA;
++    err = ff_ac3_parse_header(&gb, &hdr);
++    if (err < 0)
++        return AVERROR_INVALIDDATA;
++
++    return hdr.bitstream_id > 10 && hdr.eac3_extension_type_a;
++}
++
+ static int ac3_sync(uint64_t state, int *need_next_header, int *new_frame_start)
+ {
+     int err;
+@@ -498,4 +517,9 @@ int av_ac3_parse_header(const uint8_t *buf, size_t size,
+ {
+     return AVERROR(ENOSYS);
+ }
++
++int av_eac3_extension_type_a(const uint8_t *buf, size_t size)
++{
++    return AVERROR(ENOSYS);
++}
+ #endif
+diff --git a/libavcodec/ac3_parser.h b/libavcodec/ac3_parser.h
+index ff8cc4c..629736d 100644
+--- a/libavcodec/ac3_parser.h
++++ b/libavcodec/ac3_parser.h
+@@ -32,5 +32,16 @@
+ int av_ac3_parse_header(const uint8_t *buf, size_t size,
+                         uint8_t *bitstream_id, uint16_t *frame_size);
+ 
++/**
++ * Report whether the (E-)AC-3 syncframe at buf signals E-AC-3 extension
++ * type A (JOC / Dolby Atmos). The flag lives in the addbsi field at the
++ * tail of the variable-length BSI, so buf must cover the whole syncframe,
++ * not just the fixed header.
++ *
++ * @return 1 if the frame is E-AC-3 with flag_ec3_extension_type_a set,
++ *         0 if not, a negative AVERROR value on parse failure.
++ */
++int av_eac3_extension_type_a(const uint8_t *buf, size_t size);
++
+ 
+ #endif /* AVCODEC_AC3_PARSER_H */
