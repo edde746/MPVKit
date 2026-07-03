@@ -53,7 +53,7 @@ enum Library: String, CaseIterable {
         case .libharfbuzz:
             return "0.17.4"
         case .libdav1d:    // AV1 decoding
-            return "1.5.2-xcode"
+            return "1.5.3-neon"
         case .lcms2:
             return "2.17.0"
         case .libplacebo:
@@ -103,7 +103,7 @@ enum Library: String, CaseIterable {
                 "https://github.com/mpvkit/libplacebo-build/releases/download/\(self.version)/libplacebo-all.zip"
         case .libdav1d:
             return
-                "https://github.com/mpvkit/libdav1d-build/releases/download/\(self.version)/libdav1d-all.zip"
+                "https://github.com/edde746/libdav1d-build/releases/download/\(self.version)/libdav1d-all.zip"
         case .libdovi:
             return
                 "https://github.com/mpvkit/libdovi-build/releases/download/\(self.version)/libdovi-all.zip"
@@ -259,9 +259,9 @@ enum Library: String, CaseIterable {
                 .target(
                     name: "Libdav1d",
                     url:
-                        "https://github.com/mpvkit/libdav1d-build/releases/download/\(self.version)/Libdav1d.xcframework.zip",
+                        "https://github.com/edde746/libdav1d-build/releases/download/\(self.version)/Libdav1d.xcframework.zip",
                     checksum:
-                        "https://github.com/mpvkit/libdav1d-build/releases/download/\(self.version)/Libdav1d.xcframework.checksum.txt"
+                        "https://github.com/edde746/libdav1d-build/releases/download/\(self.version)/Libdav1d.xcframework.checksum.txt"
                 )
             ]
         case .libdovi:
