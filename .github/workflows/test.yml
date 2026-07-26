@@ -58,6 +58,9 @@ jobs:
               ''')
 
 
+      - name: Test AO capability observer
+        run: ./scripts/test_ao_capability_observer.sh
+
       - name: Install dependencies
         run: |
           brew install autoconf
