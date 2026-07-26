@@ -93,9 +93,35 @@ elif "feed_enabled" not in handler.group(0):
     failures.append("the timer handler does not check feed_enabled; a delivery "
                     "already in flight would re-arm feeding after pause or stop")
 
+# 5. The bound is macOS-only. tvOS and iOS keep the renderer's own deep queue,
+#    which is what carries AirPlay, and their hardware volume never reaches
+#    mpv's software gain in the first place. Every line that touches the
+#    feature must sit inside a TARGET_OS_OSX region, so those platforms
+#    preprocess to exactly the source they had before.
+sentinels = ("pcm_lookahead_ns", "feed_timer", "feed_enabled", "opt_max_lookahead",
+             "pcm_set_feeding", "pcm_pause_feeding", "pcm_request_media_data",
+             "pcm_cancel_pending_feed")
+for h in hunks:
+    depth, osx = 0, None  # osx = depth at which a TARGET_OS_OSX gate opened
+    for line in h["post"]:
+        t = line.strip()
+        if t.startswith("#if"):
+            depth += 1
+            if osx is None and "TARGET_OS_OSX" in t:
+                osx = depth
+        elif t.startswith("#endif"):
+            if osx == depth:
+                osx = None
+            depth -= 1
+        elif osx is None and any(s in t for s in sentinels) and not t.startswith("//"):
+            failures.append(f"'{t[:56]}' in {hunk_func(h['func'])}() is outside a "
+                            "TARGET_OS_OSX gate; the bound must not exist on "
+                            "tvOS or iOS")
+            break
+
 for f in failures:
     print(f"FAIL: {f}", file=sys.stderr)
 sys.exit(1 if failures else 0)
 PY
 
-echo "all 4 PCM lookahead invariants hold"
+echo "all 5 PCM lookahead invariants hold"
