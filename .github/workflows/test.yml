@@ -61,6 +61,9 @@ jobs:
       - name: Test AO capability observer
         run: ./scripts/test_ao_capability_observer.sh
 
+      - name: Test AO PCM lookahead
+        run: ./scripts/test_ao_pcm_lookahead.sh
+
       - name: Install dependencies
         run: |
           brew install autoconf

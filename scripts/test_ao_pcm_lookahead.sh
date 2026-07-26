@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Regression test for the bounded PCM lookahead in
+# patch/libmpv/0015-avfoundation-bound-pcm-lookahead.patch.
+#
+# The behaviour itself is timing and lifetime, which a stubbed unit test cannot
+# reach: it was validated by driving a real AVSampleBufferAudioRenderer, which
+# needs an audio device and the patched mpv, so neither belongs in CI. What is
+# checkable here are the four structural properties the design depends on, each
+# of which was a live bug at some point while writing it.
+#
+# Checks work per hunk rather than per function: the diff carries only a few
+# lines of context, so a whole function is rarely present in one piece. Each
+# hunk header names the function it falls in, which is the reliable anchor.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+patch_file="$root/Sources/BuildScripts/patch/libmpv/0015-avfoundation-bound-pcm-lookahead.patch"
+
+python3 - "$patch_file" <<'PY'
+import re, sys
+
+hunks = []  # (enclosing function, post-image text, added-only text)
+current = None
+for line in open(sys.argv[1], encoding="utf-8").read().splitlines():
+    m = re.match(r"@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?(.*)", line)
+    if m:
+        current = {"func": m.group(1), "post": [], "added": []}
+        hunks.append(current)
+        continue
+    if current is None or line.startswith(("+++", "---", "diff ", "index ")):
+        continue
+    if line.startswith("+"):
+        current["post"].append(line[1:])
+        current["added"].append(line[1:])
+    elif line.startswith(" ") or not line:
+        current["post"].append(line[1:] if line else "")
+
+def hunk_func(header):
+    # "static void uninit(struct ao *ao)" -> "uninit". Exact names matter:
+    # a substring test would let uninit satisfy a check meant for init.
+    m = re.search(r"(\w+)\s*\(", header)
+    return m.group(1) if m else ""
+
+def added_in(func_name):
+    return "\n".join("\n".join(h["added"])
+                     for h in hunks if hunk_func(h["func"]) == func_name)
+
+failures = []
+
+# 1. The bound must stay off the compressed path. feed() hands spdif straight to
+#    feed_spdif() and returns; #1300's Dolby buffering deliberately fills until
+#    the renderer pushes back, and throttling it would undo that.
+bound_hunks = [h for h in hunks if "pcm_lookahead_ns" in "\n".join(h["added"])
+               and "feed_spdif(ao);" in "\n".join(h["post"])]
+if not bound_hunks:
+    failures.append("could not find the lookahead bound alongside feed()'s spdif "
+                    "branch; update this test if either was renamed or moved")
+for h in bound_hunks:
+    post = "\n".join(h["post"])
+    # Anchor on the definition, not the forward declaration: the helpers
+    # between them legitimately mention the bound.
+    start = post.find("static void feed(struct ao *ao)\n{")
+    if start < 0:
+        continue
+    body = post[start:]
+    spdif, bound = body.find("feed_spdif(ao);"), body.find("pcm_lookahead_ns")
+    if bound >= 0 and (spdif < 0 or bound < spdif):
+        failures.append("the lookahead bound is applied before feed() returns for "
+                        "compressed audio; it must stay on the PCM path only")
+
+# 2. The timer handler dereferences the AO, which ao_uninit() frees as soon as
+#    uninit() returns, so teardown has to cancel it rather than leave a delayed
+#    firing to land in freed memory. init()'s error path owns the same duty.
+for func, what in (("uninit", "uninit()"), ("init", "init()'s error path")):
+    if "dispatch_source_cancel" not in added_in(func):
+        failures.append(f"{what} does not cancel feed_timer; a pending fire would "
+                        "dereference the freed AO")
+
+# 3. --audio-buffer is documented as a minimum the device may exceed, so it may
+#    only raise the bound, never define it.
+allsrc = "\n".join("\n".join(h["post"]) for h in hunks)
+if not re.search(r"MPMAX\(\s*p->opt_max_lookahead,\s*ao->def_buffer\s*\)", allsrc):
+    failures.append("def_buffer is no longer a floor under the bound; it is "
+                    "documented as a minimum and cannot be used as the maximum")
+
+# 4. A frozen clock never drains the queue, so an ungated handler re-arms every
+#    half-bound forever while paused.
+handler = re.search(r"dispatch_source_set_event_handler\(p->feed_timer, \^\{.*?\}\);",
+                    allsrc, re.S)
+if not handler:
+    failures.append("could not find the timer handler; update this test if it moved")
+elif "feed_enabled" not in handler.group(0):
+    failures.append("the timer handler does not check feed_enabled; a delivery "
+                    "already in flight would re-arm feeding after pause or stop")
+
+for f in failures:
+    print(f"FAIL: {f}", file=sys.stderr)
+sys.exit(1 if failures else 0)
+PY
+
+echo "all 4 PCM lookahead invariants hold"
