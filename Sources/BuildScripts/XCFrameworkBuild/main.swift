@@ -42,7 +42,14 @@ enum Library: String, CaseIterable {
         case .libmpv:
             return "v0.41.0"
         case .FFmpeg:
-            return "n8.0.1"
+            // n8.1.x fixes crash-class bugs in the first-generation native
+            // VVC (H.266) decoder shipped in n8.0.x: slices keep RefStruct
+            // references to the parameter sets they use (use-after-free when
+            // in-band SPS/PPS updates replace them), SPS/seq_decode stay in
+            // lockstep, and RASL "missing ref" false alarms stop corrupting
+            // reference management. VVC direct play crashed the process a
+            // couple of seconds into playback with n8.0.1.
+            return "n8.1.2"
         case .openssl:
             return "3.3.5"
         case .libass:
