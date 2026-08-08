@@ -1,16 +1,19 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index b82d83d..634264e 100644
+index ecffdfa..bcf7e21 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
-@@ -86,16 +86,40 @@ - (void)invalidate;
-     // jump. This lets us re-supply exactly the flushed-but-unplayed audio at
-     // its original timestamps.
-     CFMutableArrayRef replay_cache;
-     size_t replay_cache_bytes;
-     // Last observed answer to "can this route carry compressed multichannel".
-     // Edge-triggered: only a change drives a reload, so capability flapping
-     // cannot put the AO in a reload loop.
-     bool multichannel_supported;
+@@ -22,6 +22,7 @@
+ #include "common/common.h"
+ #include "common/msg.h"
+ #include "internal.h"
++#include "options/m_option.h"
+ #include "osdep/timer.h"
+ #include "ta/ta_talloc.h"
+ 
+@@ -108,6 +109,30 @@ - (void)invalidate;
+     int avp_last_item_status;    // last logged AVPlayerItemStatus
+     int avp_last_tcs;            // last logged AVPlayerTimeControlStatus
+     int avp_heartbeat;           // verbose position log divider
 +#if TARGET_OS_OSX
 +    // The bounded PCM lookahead is macOS-only. That is where --volume is
 +    // driven from a slider or the keyboard and the lag is felt; on tvOS and
@@ -35,21 +38,11 @@ index b82d83d..634264e 100644
 +    bool feed_enabled;
 +    double opt_max_lookahead;
 +#endif
-     int opt_session_mode;
  };
  
  #define IEC61937_HEADER_SIZE 8
- #define IEC61937_AC3  0x01
- #define IEC61937_EAC3 0x15
- 
- // ~40s of 768 kbps E-AC-3. Only ever needs to cover the renderer's own queue
-@@ -762,27 +786,107 @@ static void feed_spdif(struct ao *ao)
-     // renderer applies backpressure, not to hand over one read per callback.
-     // The loop is bounded by the stash size and by ao_read_data() returning 0.
-     for (int guard = 0; guard < 64 && [p->renderer isReadyForMoreMediaData]; guard++) {
-         if (!feed_spdif_once(ao))
-             break;
-     }
+@@ -545,12 +570,92 @@ static void avp_teardown_item(struct ao *ao)
+     p->au_len = 0;
  }
  
 +#if TARGET_OS_OSX
@@ -128,11 +121,6 @@ index b82d83d..634264e 100644
      int samplerate = ao->samplerate;
      int sstride = ao->sstride;
  
-     if (p->spdif) {
-         feed_spdif(ao);
-         return;
-     }
- 
 +#if TARGET_OS_OSX
 +    if (p->pcm_lookahead_ns) {
 +        int64_t now = CMTimeGetNanoseconds([p->synchronizer currentTime]);
@@ -146,19 +134,9 @@ index b82d83d..634264e 100644
      CMBlockBufferRef block_buffer = NULL;
      CMSampleBufferRef sample_buffer = NULL;
      OSStatus err;
+@@ -650,6 +755,14 @@ static void start(struct ao *ao)
  
-     int request_sample_count = samplerate / 10;
-     int buffer_size = request_sample_count * sstride;
-     void *data[] = {CFAllocatorAllocate(NULL, buffer_size, 0)};
- 
-@@ -866,46 +970,71 @@ static void start(struct ao *ao)
-         // rate-first ordering, which is latency-tuned and already correct.
-         [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
-             feed(ao);
-         }];
-         [p->synchronizer setRate:1];
-         return;
-     }
+     p->end_time_av = -1;
      [p->synchronizer setRate:1];
 +#if TARGET_OS_OSX
 +    // With no bound there is nothing to gate, so arm exactly as before rather
@@ -171,19 +149,10 @@ index b82d83d..634264e 100644
      [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
          feed(ao);
      }];
- }
- 
- static void stop(struct ao *ao)
- {
-     struct priv *p = ao->priv;
- 
-     void (^stop_block)(void) = ^{
+@@ -669,6 +782,12 @@ static void stop(struct ao *ao)
          [p->renderer stopRequestingMediaData];
          [p->renderer flush];
          [p->synchronizer setRate:0];
-         spdif_replay_cache_clear(ao);
-         p->stash_len = 0;
-         p->next_burst_pts = -1;
 +#if TARGET_OS_OSX
 +        // A frozen clock never drains the queue, so leave nothing scheduled;
 +        // start() turns feeding back on.
@@ -193,13 +162,7 @@ index b82d83d..634264e 100644
      };
      if (dispatch_get_specific(&avfoundation_queue_key) == p)
          stop_block();
-     else
-         dispatch_sync(p->queue, stop_block);
- }
- 
- static bool set_pause(struct ao *ao, bool paused)
- {
-     struct priv *p = ao->priv;
+@@ -708,7 +827,18 @@ static bool set_pause(struct ao *ao, bool paused)
  
      if (paused) {
          [p->synchronizer setRate:0];
@@ -207,30 +170,20 @@ index b82d83d..634264e 100644
 +        // The clock is stopped, so the bound can never be undercut again on
 +        // its own. Stop asking rather than waking every half-bound to
 +        // rediscover that.
-+        if (!p->spdif && p->pcm_lookahead_ns)
++        if (p->pcm_lookahead_ns)
 +            pcm_set_feeding(ao, false);
 +#endif
      } else {
 +#if TARGET_OS_OSX
-+        if (!p->spdif && p->pcm_lookahead_ns)
++        if (p->pcm_lookahead_ns)
 +            pcm_set_feeding(ao, true);
 +#endif
          [p->synchronizer setRate:1];
      }
  
-     return true;
- }
- 
- static int control(struct ao *ao, enum aocontrol cmd, void *arg)
- {
-@@ -1216,16 +1345,45 @@ static int init(struct ao *ao)
-         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0)
-     )) == NULL) {
-         MP_FATAL(ao, "failed to create dispatch queue\n");
-         MP_VERBOSE(ao, "dispatch_queue_create failed\n");
+@@ -962,6 +1092,35 @@ static int init(struct ao *ao)
          goto error;
      }
-     dispatch_queue_set_specific(p->queue, &avfoundation_queue_key, p, NULL);
  
 +#if TARGET_OS_OSX
 +    // --audio-buffer is documented as a minimum the device may exceed, so it
@@ -264,20 +217,10 @@ index b82d83d..634264e 100644
      if (ao->device && ao->device[0]) {
  #if TARGET_OS_OSX
          [p->renderer setAudioOutputDeviceUniqueID:(NSString*)cfstr_from_cstr(ao->device)];
- #endif
+@@ -1026,6 +1185,13 @@ static int init(struct ao *ao)
+         dispatch_release(p->avp_timer);
+         p->avp_timer = NULL;
      }
- 
-     [p->synchronizer addRenderer:p->renderer];
- #if HAVE_MACOS_11_3_FEATURES
-@@ -1362,16 +1520,23 @@ static int init(struct ao *ao)
-                  object:AVAudioSession.sharedInstance];
- #endif
- 
-     return CONTROL_OK;
- 
- error:
-     talloc_free(layout);
-     if (p->replay_cache) { CFRelease(p->replay_cache); p->replay_cache = NULL; }
 +#if TARGET_OS_OSX
 +    if (p->feed_timer) {
 +        dispatch_source_cancel(p->feed_timer);
@@ -285,68 +228,46 @@ index b82d83d..634264e 100644
 +        p->feed_timer = NULL;
 +    }
 +#endif
-     if (p->renderer) [p->renderer release];
-     if (p->synchronizer) [p->synchronizer release];
-     if (p->queue) dispatch_release(p->queue);
-     if (p->format_description) CFRelease(p->format_description);
- 
- #if TARGET_OS_IPHONE
-     [AVAudioSession.sharedInstance setActive:NO
-         withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-@@ -1391,16 +1556,29 @@ static void uninit(struct ao *ao)
-     if (p->status_observed) {
-         [p->renderer removeObserver:p->observer
-                          forKeyPath:@"status"
-                             context:&avfoundation_status_context];
-         p->status_observed = false;
-     }
-     stop(ao);
- 
-+    // The handler dereferences the AO, and ao_uninit() frees it as soon as
-+    // this returns. Cancelling on p->queue means no handler is mid-flight and
-+    // none can start afterwards. stop() above already left the timer idle.
+     if (p->loader) {
+         [p->loader invalidate];
+         [p->loader release];
+@@ -1065,6 +1231,19 @@ static void uninit(struct ao *ao)
+         [p->player release];
+         dispatch_release(p->queue);
+     } else {
++        // The handler dereferences the AO, and ao_uninit() frees it as soon
++        // as this returns. Cancelling on p->queue means no handler is
++        // mid-flight and none can start afterwards. stop() above already
++        // left the timer idle.
 +#if TARGET_OS_OSX
-+    if (p->feed_timer) {
-+        dispatch_sync(p->queue, ^{
-+            dispatch_source_cancel(p->feed_timer);
-+        });
-+        dispatch_release(p->feed_timer);
-+        p->feed_timer = NULL;
-+    }
++        if (p->feed_timer) {
++            dispatch_sync(p->queue, ^{
++                dispatch_source_cancel(p->feed_timer);
++            });
++            dispatch_release(p->feed_timer);
++            p->feed_timer = NULL;
++        }
 +#endif
-+
-     [p->renderer release];
-     [p->synchronizer release];
-     dispatch_release(p->queue);
-     if (p->format_description) CFRelease(p->format_description);
-     if (p->replay_cache) { CFRelease(p->replay_cache); p->replay_cache = NULL; }
- 
-     [p->observer release];
- 
-@@ -1423,17 +1601,26 @@ static void uninit(struct ao *ao)
-     .reset          = stop,
-     .start          = start,
+         [p->renderer release];
+         [p->synchronizer release];
+         dispatch_release(p->queue);
+@@ -1095,4 +1274,19 @@ static void uninit(struct ao *ao)
      .set_pause      = set_pause,
      .list_devs      = ca_get_device_list,
      .priv_size      = sizeof(struct priv),
-     .priv_defaults  = &(const struct priv){
-         // Dolby's sequence diagram prescribes AVAudioSessionModeDefault.
-         .opt_session_mode = SESSION_MODE_DEFAULT,
++    .priv_defaults  = &(const struct priv){
 +        // Well inside the renderer's own depth, so the queue still absorbs
 +        // scheduling jitter, while cutting the delay before a volume change
 +        // is audible to a fraction of what it was.
 +#if TARGET_OS_OSX
 +        .opt_max_lookahead = 0.5,
 +#endif
-     },
-     .options = (const struct m_option[]) {
-         {"session-mode", OPT_CHOICE(opt_session_mode,
-             {"default", SESSION_MODE_DEFAULT},
-             {"movie-playback", SESSION_MODE_MOVIE})},
++    },
++    .options = (const struct m_option[]) {
 +#if TARGET_OS_OSX
 +        {"max-lookahead", OPT_DOUBLE(opt_max_lookahead), M_RANGE(0, 10)},
 +#endif
-         {0}
-     },
-     .options_prefix = "ao-avfoundation",
++        {0}
++    },
++    .options_prefix = "ao-avfoundation",
  };

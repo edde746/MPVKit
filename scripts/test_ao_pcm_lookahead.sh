@@ -47,26 +47,24 @@ def added_in(func_name):
 
 failures = []
 
-# 1. The bound must stay off the compressed path. feed() hands spdif straight to
-#    feed_spdif() and returns; #1300's Dolby buffering deliberately fills until
-#    the renderer pushes back, and throttling it would undo that.
-bound_hunks = [h for h in hunks if "pcm_lookahead_ns" in "\n".join(h["added"])
-               and "feed_spdif(ao);" in "\n".join(h["post"])]
-if not bound_hunks:
-    failures.append("could not find the lookahead bound alongside feed()'s spdif "
-                    "branch; update this test if either was renamed or moved")
-for h in bound_hunks:
+# 1. The bound must stay off the compressed path. The compressed sink never
+#    arms feed() -- start() wires requestMediaDataWhenReadyOnQueue only for
+#    PCM, and the AVPlayer path is driven by feed_avp() -- so the gate must
+#    sit inside feed(), and the compressed driver must not consult the bound.
+gate_found = False
+for h in hunks:
     post = "\n".join(h["post"])
-    # Anchor on the definition, not the forward declaration: the helpers
-    # between them legitimately mention the bound.
     start = post.find("static void feed(struct ao *ao)\n{")
-    if start < 0:
-        continue
-    body = post[start:]
-    spdif, bound = body.find("feed_spdif(ao);"), body.find("pcm_lookahead_ns")
-    if bound >= 0 and (spdif < 0 or bound < spdif):
-        failures.append("the lookahead bound is applied before feed() returns for "
-                        "compressed audio; it must stay on the PCM path only")
+    if start >= 0 and "pcm_lookahead_ns" in post[start:]:
+        gate_found = True
+if not gate_found:
+    failures.append("could not find the lookahead gate inside feed(); update "
+                    "this test if feed() was renamed or moved")
+for h in hunks:
+    added = "\n".join(h["added"])
+    if "pcm_lookahead_ns" in added and ("feed_avp" in added or "avp_pull" in added):
+        failures.append("the compressed driver touches the lookahead bound; it "
+                        "must stay on the PCM path only")
 
 # 2. The timer handler dereferences the AO, which ao_uninit() frees as soon as
 #    uninit() returns, so teardown has to cancel it rather than leave a delayed
