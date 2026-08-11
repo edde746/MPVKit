@@ -2815,7 +2815,7 @@ index 0000000000..1b3e13aece
 +    .opts = avfoundation_options,
 +    .size = sizeof(struct avfoundation_opts),
 +    .defaults = &(const struct avfoundation_opts){
-+        .queue_lead_ms = 128,
++        .queue_lead_ms = TARGET_OS_TV ? 500 : 128,
 +    },
 +};
 +
