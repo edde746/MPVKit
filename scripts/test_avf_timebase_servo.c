@@ -1,13 +1,12 @@
 // Simulation test for the vo_avfoundation timebase servo
 // (patch/libmpv/0016-avfoundation-timebase-rate-servo.patch).
 //
-// The servo decision code is compiled VERBATIM from the patched mpv source
-// (extracted into servo_core.inc by test_avf_timebase_servo.sh); the harness
-// mirrors update_media_timebase_for_frame()'s surrounding bookkeeping and
+// The servo and playback-rate decision code is compiled VERBATIM from the
+// patched mpv source. The harness mirrors the surrounding bookkeeping and
 // models the CMTimebase plus mpv's audio-slaved frame schedule under
 // disturbance shapes seen on real hardware: constant clock skew, wandering
 // skew (HDMI audio PLLs), step discontinuities (route changes), playback
-// speed changes, and scheduling jitter.
+// speed changes, timestamp quantization, and bursty scheduling deadlines.
 //
 // What is asserted, per scenario:
 //   - pacing: the timebase's projected media time stays within a few ms of
@@ -26,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define MP_TIME_US_TO_NS(us) ((us) * INT64_C(1000))
 #define MP_TIME_MS_TO_NS(ms) ((ms) * INT64_C(1000000))
 #define MP_TIME_S_TO_NS(s) ((s) * INT64_C(1000000000))
 #define MPCLAMP(a, min, max) (((a) > (max)) ? (max) : (((a) < (min)) ? (min) : (a)))
@@ -72,11 +72,12 @@ struct sim_vo {
     bool anchor_valid;
     double nominal_rate;   // p->timebase_rate
     double applied_rate;   // p->timebase_applied_rate
-    int64_t anchor_media_pts_ns;
-    int64_t anchor_present_host_ns;
+    int64_t anchor_media_pts_ns;     // legacy model only
+    int64_t anchor_present_host_ns;  // legacy model only
     int64_t last_rate_update_ns;
     double servo_integral;
     int64_t last_servo_eval_ns;
+    struct avf_rate_est rate_est;
     bool legacy;           // pre-servo behavior: 20ms dead zone + snap
     // counters
     int anchors;
@@ -93,21 +94,26 @@ static void vo_init(struct sim_vo *vo, bool legacy)
 }
 
 static void vo_flip(struct sim_vo *vo, int64_t now, int64_t present_host_ns,
-                    int64_t media_pts_ns)
+                    int64_t media_pts_ns, int64_t frame_duration_ns)
 {
     tb_advance(&vo->tb, now);
 
     double rate = vo->nominal_rate > 0.0 ? vo->nominal_rate : 1.0;
+    double sampled_rate = rate;
+    bool sampled_valid = avf_rate_sample(
+        &vo->rate_est, media_pts_ns, frame_duration_ns, rate,
+        &sampled_rate);
 
+    // Retain the old host-deadline inference only in the legacy comparison.
     bool inferred_valid = false;
     double inferred = rate;
     int64_t span_host_ns = 0;
-    if (vo->anchor_valid && vo->anchor_present_host_ns) {
+    if (vo->legacy && vo->anchor_valid && vo->anchor_present_host_ns) {
         int64_t media_delta = media_pts_ns - vo->anchor_media_pts_ns;
         span_host_ns = present_host_ns - vo->anchor_present_host_ns;
         if (media_delta > 0 && span_host_ns >= MP_TIME_MS_TO_NS(5)) {
             double candidate = (double)media_delta / (double)span_host_ns;
-            if (candidate >= 0.05 && candidate <= 8.0) {
+            if (candidate >= AVF_RATE_MIN && candidate <= AVF_RATE_MAX) {
                 inferred = candidate;
                 inferred_valid = true;
             }
@@ -115,7 +121,12 @@ static void vo_flip(struct sim_vo *vo, int64_t now, int64_t present_host_ns,
     }
 
     bool rate_changed = false;
-    if (inferred_valid) {
+    if (!vo->legacy && sampled_valid &&
+        fabs(sampled_rate - rate) > AVF_RATE_CHANGE_FRACTION * rate) {
+        rate = sampled_rate;
+        rate_changed = true;
+    }
+    if (vo->legacy && inferred_valid) {
         double noise_gate = (double)MP_TIME_MS_TO_NS(3) / (double)span_host_ns;
         double gate = MPMAX(0.01, noise_gate);
         if (fabs(inferred - rate) > gate * rate) {
@@ -152,8 +163,6 @@ static void vo_flip(struct sim_vo *vo, int64_t now, int64_t present_host_ns,
                                           &snap, &update_rate);
             if (snap) {
                 should_anchor = true;
-                if (inferred_valid && span_host_ns >= MP_TIME_MS_TO_NS(100))
-                    rate = inferred;
             } else if (update_rate) {
                 tb_set_rate(&vo->tb, now, servo);
                 vo->applied_rate = servo;
@@ -199,6 +208,8 @@ struct disturbance {
     int64_t speed_at_ns;  // host time to switch playback speed (0 = none)
     double speed;         // new speed
     double jitter_ms;     // uniform schedule jitter amplitude
+    int deadline_burst_every; // add a one-frame deadline delay every N frames
+    double deadline_burst_ms;
 };
 
 struct result {
@@ -208,6 +219,7 @@ struct result {
     double err_peak_early_ms;  // peak |error| inside settle window
     int64_t worst_at_ns;
     int64_t last_anchor_host_ns; // host time of the last non-initial anchor
+    double final_nominal_rate;
 };
 
 static struct result simulate(bool legacy, double fps, double duration_s,
@@ -251,11 +263,15 @@ static struct result simulate(bool legacy, double fps, double duration_s,
 
         int64_t present = (int64_t)(host_ns +
             d->jitter_ms * 1e6 * rng_uniform());
+        if (d->deadline_burst_every > 0 &&
+            n > 0 && n % d->deadline_burst_every == 0)
+            present += (int64_t)(d->deadline_burst_ms * 1e6);
         int64_t now = present - lead_ns;
         int64_t media_pts = (int64_t)media_ns;
 
         int anchors_before = vo.anchors;
-        vo_flip(&vo, now, present, media_pts);
+        vo_flip(&vo, now, present, media_pts,
+                (int64_t)(frame_media_ns / speed));
         if (vo.anchors > anchors_before && vo.anchors > 1) {
             res.anchors_after_first++;
             res.last_anchor_host_ns = (int64_t)host_ns;
@@ -286,6 +302,7 @@ static struct result simulate(bool legacy, double fps, double duration_s,
     }
 
     res.rate_updates = vo.rate_updates;
+    res.final_nominal_rate = vo.nominal_rate;
     return res;
 }
 
@@ -310,7 +327,24 @@ int main(void)
         CHECK(r.err_peak_ms < 2.0, "err %.2fms\n", r.err_peak_ms);
     }
 
-    // 2. Severe constant skew (500ppm; real HDMI clocks are usually <100).
+    // 2. Bursty host deadlines observed with compressed AVPlayer audio:
+    //    one frame arrives 30ms late every five seconds. This must remain
+    //    phase noise, not be misclassified as a playback-speed change.
+    {
+        struct disturbance d = { .jitter_ms = 1.5,
+                                 .deadline_burst_every = 120,
+                                 .deadline_burst_ms = 30.0 };
+        struct result servo = simulate(false, 23.976, 600, 10, &d);
+        struct result legacy = simulate(true, 23.976, 600, 10, &d);
+        printf("bursty deadlines: servo anchors=%d | legacy anchors=%d\n",
+               servo.anchors_after_first, legacy.anchors_after_first);
+        CHECK(servo.anchors_after_first == 0,
+              "deadline bursts must not change rate or snap\n");
+        CHECK(legacy.anchors_after_first > 0,
+              "legacy host-deadline inference should reproduce the bug\n");
+    }
+
+    // 3. Severe constant skew (500ppm; real HDMI clocks are usually <100).
     {
         struct disturbance d = { .skew = 500e-6, .jitter_ms = 1.0 };
         struct result r = simulate(false, 23.976, 3600, 10, &d);
@@ -320,7 +354,7 @@ int main(void)
         CHECK(r.err_peak_ms < 3.0, "err %.2fms\n", r.err_peak_ms);
     }
 
-    // 3. Wandering skew (PLL temperature wander).
+    // 4. Wandering skew (PLL temperature wander).
     {
         struct disturbance d = { .skew = 30e-6, .wander_amp = 300e-6,
                                  .wander_period = 120, .jitter_ms = 1.5 };
@@ -331,7 +365,7 @@ int main(void)
         CHECK(r.err_peak_ms < 3.0, "err %.2fms\n", r.err_peak_ms);
     }
 
-    // 4. Slow, large wander: the shape that pushed the legacy dead zone into
+    // 5. Slow, large wander: the shape that pushed the legacy dead zone into
     //    cadence-visible error. Servo must hold it to sub-vsync error.
     {
         struct disturbance d = { .skew = 30e-6, .wander_amp = 150e-6,
@@ -351,7 +385,7 @@ int main(void)
               legacy.err_peak_ms);
     }
 
-    // 5. Audio-clock step (route renegotiation): one prompt snap, then clean.
+    // 6. Audio-clock step (route renegotiation): one prompt snap, then clean.
     {
         struct disturbance d = { .skew = 30e-6, .jitter_ms = 1.0,
                                  .step_at_ns = MP_TIME_S_TO_NS(600),
@@ -364,10 +398,8 @@ int main(void)
         CHECK(r.err_peak_ms < 3.0, "err %.2fms after recovery\n", r.err_peak_ms);
     }
 
-    // 6. Playback speed change 1.0 -> 1.5: a bounded snap burst right at
-    //    the change (the discontinuity path adopting the new rate), then
-    //    ten clean minutes with the residual mismatch absorbed by the
-    //    integrator.
+    // 7. Playback speed change 1.0 -> 1.5: the frame-duration estimator
+    //    adopts the new nominal rate within a few frames, then runs clean.
     {
         struct disturbance d = { .skew = 30e-6, .jitter_ms = 1.0,
                                  .speed_at_ns = MP_TIME_S_TO_NS(300),
@@ -375,16 +407,37 @@ int main(void)
         struct result r = simulate(false, 23.976, 900, 10, &d);
         printf("speed 1.5x:       err_peak=%.2fms anchors=%d updates=%d\n",
                r.err_peak_ms, r.anchors_after_first, r.rate_updates);
-        CHECK(r.anchors_after_first >= 1 && r.anchors_after_first <= 4,
-              "speed change should settle in <=4 snaps, got %d\n",
+        CHECK(r.anchors_after_first >= 1 && r.anchors_after_first <= 2,
+              "speed change should settle in <=2 anchors, got %d\n",
               r.anchors_after_first);
+        CHECK(fabs(r.final_nominal_rate - d.speed) < 0.01,
+              "expected nominal rate %.2f, got %.6f\n",
+              d.speed, r.final_nominal_rate);
         CHECK(r.last_anchor_host_ns - d.speed_at_ns < MP_TIME_S_TO_NS(5),
               "snaps must cluster at the change, last at +%.1fs\n",
               (r.last_anchor_host_ns - d.speed_at_ns) / 1e9);
         CHECK(r.err_peak_ms < 3.0, "err %.2fms after adoption\n", r.err_peak_ms);
     }
 
-    // 7. 50fps content (PAL): same guarantees at a tighter frame budget.
+    // 8. A small speed change stays below the fast-path threshold and must be
+    //    adopted by the quantization-resistant 500ms estimator instead.
+    {
+        struct disturbance d = { .skew = 30e-6, .jitter_ms = 1.0,
+                                 .speed_at_ns = MP_TIME_S_TO_NS(300),
+                                 .speed = 1.02 };
+        struct result r = simulate(false, 23.976, 900, 10, &d);
+        printf("speed 1.02x:      err_peak=%.2fms anchors=%d updates=%d\n",
+               r.err_peak_ms, r.anchors_after_first, r.rate_updates);
+        CHECK(r.anchors_after_first >= 1 && r.anchors_after_first <= 2,
+              "small speed change should settle in <=2 anchors, got %d\n",
+              r.anchors_after_first);
+        CHECK(fabs(r.final_nominal_rate - d.speed) < 0.005,
+              "expected nominal rate %.2f, got %.6f\n",
+              d.speed, r.final_nominal_rate);
+        CHECK(r.err_peak_ms < 3.0, "err %.2fms after adoption\n", r.err_peak_ms);
+    }
+
+    // 9. 50fps content (PAL): same guarantees at a tighter frame budget.
     {
         struct disturbance d = { .skew = 100e-6, .wander_amp = 200e-6,
                                  .wander_period = 180, .jitter_ms = 1.0 };

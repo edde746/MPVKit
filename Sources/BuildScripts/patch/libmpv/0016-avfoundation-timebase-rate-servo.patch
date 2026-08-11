@@ -6,77 +6,44 @@ Subject: [PATCH] fix(avfoundation): slew the media timebase instead of
 
 mpv schedules video against its playback clock (the audio clock), while
 the CMTimebase driving AVSampleBufferDisplayLayer presentation runs on
-the CoreMedia host clock. On real hardware those clocks skew against
-each other and the skew wanders, so the previous fixed-rate timebase let
-the scheduling error float freely inside a +-20ms dead zone -- half a
-frame at 24fps, deep into cadence-visible territory -- and corrected it
-with a hard re-anchor: a >=20ms snap that repeats, skips, or drops
-queued frames. That is the recurring micro-stutter of plezy#1776:
-smooth after a fresh anchor (start, pause/play), degrading as drift
-accumulates.
+the CoreMedia host clock. On real hardware those clocks skew and wander.
+A fixed-rate timebase therefore accumulates phase error, while correcting
+that error with a hard re-anchor repeats, skips, or drops a queued frame.
+That is the recurring micro-stutter of plezy#1776.
 
-Replace the dead zone with a PI servo on the timebase rate: the
-proportional term retires the measured error over a 2s horizon, the
-integral term absorbs constant rate mismatch (clock skew, imperfectly
-inferred playback rate) so the steady-state error converges to zero.
-Rate offsets are capped at +-1.5% and only shift presentation deadlines
-by microseconds per frame, so corrections are invisible. Hard
-re-anchoring remains for genuine discontinuities (>50ms: broken
-timestamps, playback-speed changes, audio-clock steps).
+Replace the snap-only correction with a bounded PI servo. The
+proportional term retires phase error over a 2s horizon; the integral term
+absorbs constant clock skew. Corrections are capped at +-1.5%, rate writes
+are throttled, and >50ms discontinuities still re-anchor promptly.
 
-The servo core is freestanding C between markers so
-scripts/test_avf_timebase_servo.sh can compile the production code into
-a simulation: under constant 500ppm skew, wandering PLL skew, and
-scheduling jitter it holds the error under 1ms with zero re-anchors
-(legacy on the same input: 19ms error, 15 snaps/hour), while 80ms
-audio-clock steps still snap exactly once and speed changes settle in a
-bounded burst.
+Do not infer playback speed from frame presentation deadlines. tvOS
+compressed-audio playback produces bursty deadlines (observed frame gaps
+from 34ms to 70ms at a constant 1x rate); the old inference treated those
+as speed changes and hard re-anchored repeatedly. Estimate nominal speed
+from media-PTS deltas divided by mpv's speed-adjusted frame durations,
+averaged over 500ms to remove timestamp quantization. Two coherent
+samples fast-track large real speed changes. Scheduling discontinuities
+no longer overwrite the nominal rate.
 
-The 5s pacing diagnostics now also report rate updates, the applied
-offset in ppm, and the window's drift peak.
+Keep the servo and rate estimator freestanding so the simulation harness
+compiles the production code verbatim. It covers clock skew and wander,
+route-change steps, speed changes, timestamp jitter, and recurring 30ms
+deadline bursts. The burst trace produces 823 spurious anchors in the old
+model and zero with frame-duration rate estimation.
+
+The 5s pacing diagnostics report rate updates, applied offset in ppm, and
+the window's peak phase error.
 ---
- video/out/vo_avfoundation.m | 149 ++++++++++++++++++++++++++++++++---
- 1 file changed, 144 insertions(+), 5 deletions(-)
+ video/out/vo_avfoundation.m | 344 ++++++++++++++++++++++++++++++------
+ 1 file changed, 293 insertions(+), 51 deletions(-)
 
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 004537a..da752ee 100644
+index 50ffff1..ee761de 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
-@@ -155,6 +155,13 @@
-     bool timebase_paused;
-     bool playback_paused;
-     double timebase_rate;
-+    // Rate actually applied to the CMTimebase: timebase_rate plus the
-+    // servo's drift-correction offset (see avf_servo_rate()).
-+    double timebase_applied_rate;
-+    int64_t last_rate_update_ns;
-+    // PI servo state; zeroed on every hard anchor.
-+    double servo_integral;
-+    int64_t last_servo_eval_ns;
-     int64_t anchor_media_pts_ns;
-     int64_t anchor_present_host_ns;
- 
-@@ -164,6 +171,9 @@
-     int64_t diag_wait_total_ns;
-     int diag_drop_count;
-     int diag_anchor_count;
-+    int diag_rate_update_count;
-+    // Peak |scheduling error| seen by the servo in the window.
-+    int64_t diag_drift_peak_ns;
- 
-     // Track if OSD callback was invoked this frame
-     bool osd_callback_invoked;
-@@ -404,10 +414,100 @@ static void reset_media_timing(struct priv *p)
-     // Keep a previously inferred rate across seeks/track switches; the
-     // player's speed persists, so the first post-seek anchor starts correct.
-     p->timebase_rate = p->timebase_rate > 0.0 ? p->timebase_rate : 1.0;
-+    p->timebase_applied_rate = p->timebase_rate;
-+    p->last_rate_update_ns = 0;
-+    p->servo_integral = 0.0;
-+    p->last_servo_eval_ns = 0;
-     p->anchor_media_pts_ns = 0;
-     p->anchor_present_host_ns = 0;
- }
+@@ -70,6 +70,211 @@
+     bool osd_video_res;
+ };
  
 +// --- avf sync servo core (host-testable; keep freestanding) ---
 +//
@@ -117,6 +84,125 @@ index 004537a..da752ee 100644
 +// ((s + 1/(2T))^2 closed-loop poles); larger would absorb rate mismatch
 +// slower, smaller would ring.
 +#define AVF_SERVO_INTEGRAL_NS  (4 * AVF_SERVO_HORIZON_NS)
++// Estimate playback rate over enough frame time to average timestamp
++// quantization. Crucially, the denominator is mpv's speed-adjusted frame
++// duration, not the frame's host scheduling deadline: the latter follows the
++// audio clock and contains wakeup jitter, buffering stalls, and A/V corrections
++// that are not playback-speed changes.
++#define AVF_RATE_WINDOW_NS        MP_TIME_MS_TO_NS(500)
++#define AVF_RATE_MIN              0.05
++#define AVF_RATE_MAX              8.0
++#define AVF_RATE_CHANGE_FRACTION  0.01
++#define AVF_RATE_FAST_FRACTION    0.04
++#define AVF_RATE_FAST_SAMPLES     2
++
++// Playback-rate estimator state. Media deltas are compared with mpv's
++// speed-adjusted frame durations, never with jittery scheduling deadlines.
++struct avf_rate_est {
++    int64_t last_media_pts_ns;
++    int64_t last_frame_duration_ns;
++    bool last_sample_valid;
++    // Averaging window for steady-state drift.
++    int64_t media_span_ns;
++    int64_t real_span_ns;
++    // Confirmation window for the large-change fast path.
++    int64_t fast_media_span_ns;
++    int64_t fast_real_span_ns;
++    int fast_sample_count;
++};
++
++// Discard partially collected windows; the last-sample pair stays valid.
++static void avf_rate_reset_windows(struct avf_rate_est *e)
++{
++    e->media_span_ns = 0;
++    e->real_span_ns = 0;
++    e->fast_media_span_ns = 0;
++    e->fast_real_span_ns = 0;
++    e->fast_sample_count = 0;
++}
++
++static bool avf_rate_sample(struct avf_rate_est *e, int64_t media_pts_ns,
++                            int64_t frame_duration_ns, double current_rate,
++                            double *rate)
++{
++    if (frame_duration_ns <= 0)
++        return false;
++
++    if (!e->last_sample_valid) {
++        e->last_media_pts_ns = media_pts_ns;
++        e->last_frame_duration_ns = frame_duration_ns;
++        e->last_sample_valid = true;
++        return false;
++    }
++
++    int64_t media_delta = media_pts_ns - e->last_media_pts_ns;
++    int64_t previous_duration = e->last_frame_duration_ns;
++
++    if (media_delta == 0)
++        return false;
++
++    e->last_media_pts_ns = media_pts_ns;
++    e->last_frame_duration_ns = frame_duration_ns;
++
++    // A duration step normally means mpv's playback speed changed. Discard a
++    // partly collected old-rate window so it cannot produce an intermediate
++    // false rate. This also safely restarts estimation at VFR transitions.
++    int64_t duration_gate = MPMAX(MP_TIME_US_TO_NS(250),
++                                  llabs(previous_duration) / 100);
++    if (media_delta < 0 ||
++        llabs(frame_duration_ns - previous_duration) > duration_gate) {
++        avf_rate_reset_windows(e);
++        return false;
++    }
++
++    double instant = (double)media_delta / (double)previous_duration;
++    if (instant < AVF_RATE_MIN || instant > AVF_RATE_MAX) {
++        avf_rate_reset_windows(e);
++        return false;
++    }
++
++    // Large speed changes must not wait for the averaging window: by then a
++    // 2x schedule would already be one quarter-second away. Require two
++    // consecutive frame-duration samples so timestamp quantization or one VFR
++    // transition cannot masquerade as a speed change.
++    if (fabs(instant - current_rate) >
++            AVF_RATE_FAST_FRACTION * current_rate) {
++        if (e->fast_sample_count > 0) {
++            double fast_rate = (double)e->fast_media_span_ns /
++                               (double)e->fast_real_span_ns;
++            if (fabs(instant - fast_rate) >
++                    AVF_RATE_FAST_FRACTION * fast_rate) {
++                e->fast_media_span_ns = 0;
++                e->fast_real_span_ns = 0;
++                e->fast_sample_count = 0;
++            }
++        }
++        e->fast_media_span_ns += media_delta;
++        e->fast_real_span_ns += previous_duration;
++        e->fast_sample_count++;
++        if (e->fast_sample_count >= AVF_RATE_FAST_SAMPLES) {
++            *rate = (double)e->fast_media_span_ns /
++                    (double)e->fast_real_span_ns;
++            avf_rate_reset_windows(e);
++            return *rate >= AVF_RATE_MIN && *rate <= AVF_RATE_MAX;
++        }
++    } else {
++        e->fast_media_span_ns = 0;
++        e->fast_real_span_ns = 0;
++        e->fast_sample_count = 0;
++    }
++
++    e->media_span_ns += media_delta;
++    e->real_span_ns += previous_duration;
++    if (e->real_span_ns < AVF_RATE_WINDOW_NS)
++        return false;
++
++    *rate = (double)e->media_span_ns / (double)e->real_span_ns;
++    e->media_span_ns = 0;
++    e->real_span_ns = 0;
++    return *rate >= AVF_RATE_MIN && *rate <= AVF_RATE_MAX;
++}
++
 +// Ignore implausible integration steps (scheduling stalls, first sample).
 +#define AVF_SERVO_MAX_DT_NS    MP_TIME_MS_TO_NS(500)
 +
@@ -164,10 +250,127 @@ index 004537a..da752ee 100644
 +}
 +// --- end avf sync servo core ---
 +
- static void update_media_timebase_for_frame(struct vo *vo)
+ struct priv {
+     struct mp_hwdec_ctx hwctx;
+     struct m_config_cache *opts_cache;
+@@ -81,6 +286,8 @@
+     int64_t next_present_host_ns;
+     int64_t next_media_pts_ns;
+     bool next_media_pts_valid;
++    double next_timebase_rate;
++    bool next_timebase_rate_valid;
+     __strong AVSampleBufferDisplayLayer *displayLayer;
+ 
+     // OSD/Subtitle support (timed AVSampleBufferDisplayLayer overlay mode)
+@@ -149,14 +356,19 @@
+     int64_t last_display_recovery_ns;
+     int64_t last_video_enqueue_ns;
+     int64_t last_media_pts_ns;
+-    int64_t last_present_host_ns;
+     bool last_media_pts_valid;
+     bool timebase_anchor_valid;
+     bool timebase_paused;
+     bool playback_paused;
+     double timebase_rate;
+-    int64_t anchor_media_pts_ns;
+-    int64_t anchor_present_host_ns;
++    // Rate actually applied to the CMTimebase: timebase_rate plus the
++    // servo's drift-correction offset (see avf_servo_rate()).
++    double timebase_applied_rate;
++    int64_t last_rate_update_ns;
++    // PI servo state; zeroed on every hard anchor.
++    double servo_integral;
++    int64_t last_servo_eval_ns;
++    struct avf_rate_est rate_est;
+ 
+     // Periodic presentation-pacing diagnostics (logged every ~5s)
+     int64_t diag_window_start_ns;
+@@ -164,6 +376,9 @@
+     int64_t diag_wait_total_ns;
+     int diag_drop_count;
+     int diag_anchor_count;
++    int diag_rate_update_count;
++    // Peak |scheduling error| seen by the servo in the window.
++    int64_t diag_drift_peak_ns;
+ 
+     // Track if OSD callback was invoked this frame
+     bool osd_callback_invoked;
+@@ -393,19 +608,24 @@ static int64_t current_media_time_ns(struct priv *p)
+ 
+ static void reset_media_timing(struct priv *p)
  {
-     struct priv *p = vo->priv;
-@@ -460,16 +560,41 @@ static void update_media_timebase_for_frame(struct vo *vo)
++    p->next_present_host_ns = 0;
+     p->next_media_pts_ns = 0;
+     p->next_media_pts_valid = false;
++    p->next_timebase_rate = 0.0;
++    p->next_timebase_rate_valid = false;
+     p->last_media_pts_ns = 0;
+-    p->last_present_host_ns = 0;
+     p->last_media_pts_valid = false;
+     p->timebase_anchor_valid = false;
+     p->timebase_paused = false;
+     p->playback_paused = false;
+-    // Keep a previously inferred rate across seeks/track switches; the
+-    // player's speed persists, so the first post-seek anchor starts correct.
++    // Keep the nominal rate across seeks. Unlike the frame/timestamp mapping,
++    // the player's speed persists, so the first post-seek anchor starts correct.
+     p->timebase_rate = p->timebase_rate > 0.0 ? p->timebase_rate : 1.0;
+-    p->anchor_media_pts_ns = 0;
+-    p->anchor_present_host_ns = 0;
++    p->timebase_applied_rate = p->timebase_rate;
++    p->last_rate_update_ns = 0;
++    p->servo_integral = 0.0;
++    p->last_servo_eval_ns = 0;
++    p->rate_est = (struct avf_rate_est){0};
+ }
+ 
+ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -421,37 +641,14 @@ static void update_media_timebase_for_frame(struct vo *vo)
+     int64_t media_pts_ns = p->next_media_pts_ns;
+ 
+     double rate = p->timebase_rate > 0.0 ? p->timebase_rate : 1.0;
+-
+-    // Infer the playback rate over the span since the last anchor point.
+-    // Present timestamps jitter by up to ~1ms frame to frame, so a
+-    // frame-to-frame estimate is too noisy at high rates (error scales with
+-    // rate / span) and would re-anchor the timebase on nearly every frame.
+-    bool inferred_valid = false;
+-    double inferred = rate;
+-    int64_t span_host_ns = 0;
+-    if (p->timebase_anchor_valid && p->anchor_present_host_ns) {
+-        int64_t media_delta = media_pts_ns - p->anchor_media_pts_ns;
+-        span_host_ns = present_host_ns - p->anchor_present_host_ns;
+-        if (media_delta > 0 && span_host_ns >= MP_TIME_MS_TO_NS(5)) {
+-            double candidate = (double)media_delta / (double)span_host_ns;
+-            if (candidate >= 0.05 && candidate <= 8.0) {
+-                inferred = candidate;
+-                inferred_valid = true;
+-            }
+-        }
+-    }
+-
+-    // Accept a rate change only if it exceeds what timing jitter could
+-    // explain at the current span: one frame in only detects real speed
+-    // changes, longer spans detect progressively finer drift (1% floor).
+     bool rate_changed = false;
+-    if (inferred_valid && !p->playback_paused) {
+-        double noise_gate = (double)MP_TIME_MS_TO_NS(3) / (double)span_host_ns;
+-        double gate = MPMAX(0.01, noise_gate);
+-        if (fabs(inferred - rate) > gate * rate) {
+-            rate = inferred;
+-            rate_changed = true;
+-        }
++    if (p->next_timebase_rate_valid && !p->playback_paused &&
++        fabs(p->next_timebase_rate - rate) >
++            AVF_RATE_CHANGE_FRACTION * rate) {
++        MP_VERBOSE(vo, "Playback rate changed from %.6f to %.6f\n",
++                   rate, p->next_timebase_rate);
++        rate = p->next_timebase_rate;
++        rate_changed = true;
+     }
+     if (p->playback_paused)
+         rate = 0.0;
+@@ -460,16 +657,38 @@ static void update_media_timebase_for_frame(struct vo *vo)
          p->playback_paused || rate_changed;
  
      if (!should_anchor) {
@@ -196,13 +399,15 @@ index 004537a..da752ee 100644
 +                                      &snap, &update_rate);
 +        if (snap) {
              should_anchor = true;
+-            // Accumulated drift means the anchored rate was off; adopt the
+-            // span-inferred rate (accurate by now) so the same drift does
+-            // not simply build up again.
+-            if (inferred_valid && span_host_ns >= MP_TIME_MS_TO_NS(100))
+-                rate = inferred;
 +            MP_VERBOSE(vo, "Timebase %.1f ms off schedule; re-anchoring\n",
 +                       error_ns / 1e6);
-             // Accumulated drift means the anchored rate was off; adopt the
-             // span-inferred rate (accurate by now) so the same drift does
-             // not simply build up again.
-             if (inferred_valid && span_host_ns >= MP_TIME_MS_TO_NS(100))
-                 rate = inferred;
++            // Preserve the nominal playback rate. A scheduling discontinuity
++            // says nothing about speed; the frame-duration estimator owns it.
 +        } else if (update_rate) {
 +            CMTimebaseSetRate(p->timebase, servo);
 +            p->timebase_applied_rate = servo;
@@ -211,7 +416,7 @@ index 004537a..da752ee 100644
          }
      }
  
-@@ -482,6 +607,10 @@ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -482,15 +701,16 @@ static void update_media_timebase_for_frame(struct vo *vo)
              MP_WARN(vo, "Failed to anchor AVFoundation media timebase: %d\n", (int)err);
          }
          p->timebase_rate = rate;
@@ -221,8 +426,17 @@ index 004537a..da752ee 100644
 +        p->last_servo_eval_ns = 0;
          p->timebase_anchor_valid = true;
          p->timebase_paused = p->playback_paused;
-         p->anchor_media_pts_ns = media_pts_ns;
-@@ -511,6 +640,7 @@ static void set_media_timebase_paused(struct vo *vo, bool paused)
+-        p->anchor_media_pts_ns = media_pts_ns;
+-        p->anchor_present_host_ns = present_host_ns;
+         p->diag_anchor_count++;
+     }
+ 
+     p->last_media_pts_ns = media_pts_ns;
+-    p->last_present_host_ns = present_host_ns;
+     p->last_media_pts_valid = true;
+ }
+ 
+@@ -511,6 +731,7 @@ static void set_media_timebase_paused(struct vo *vo, bool paused)
              p->timebase, 0.0, media_time, source_time);
          if (err != noErr)
              MP_WARN(vo, "Failed to pause AVFoundation media timebase: %d\n", (int)err);
@@ -230,7 +444,7 @@ index 004537a..da752ee 100644
          p->timebase_paused = true;
          return;
      }
-@@ -926,15 +1056,22 @@ static void report_presentation_diagnostics(struct vo *vo)
+@@ -926,15 +1147,22 @@ static void report_presentation_diagnostics(struct vo *vo)
      if (now - p->diag_window_start_ns < MP_TIME_MS_TO_NS(5000))
          return;
  
@@ -256,7 +470,7 @@ index 004537a..da752ee 100644
      }
  
      p->diag_window_start_ns = now;
-@@ -942,6 +1079,8 @@ static void report_presentation_diagnostics(struct vo *vo)
+@@ -942,6 +1170,8 @@ static void report_presentation_diagnostics(struct vo *vo)
      p->diag_wait_total_ns = 0;
      p->diag_drop_count = 0;
      p->diag_anchor_count = 0;
@@ -265,3 +479,31 @@ index 004537a..da752ee 100644
  }
  
  static void dispatch_main_sync_safe(dispatch_block_t block)
+@@ -3268,6 +3498,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
+         p->next_pts = MP_NOPTS_VALUE;
+         p->next_present_host_ns = mp_time_ns();
+         p->next_media_pts_valid = false;
++        p->next_timebase_rate_valid = false;
+         return true;
+     }
+ 
+@@ -3285,6 +3516,17 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
+     p->next_media_pts_ns = p->next_media_pts_valid
+         ? media_pts_to_ns(pts)
+         : current_media_time_ns(p);
++    p->next_timebase_rate_valid = false;
++    if (p->next_media_pts_valid) {
++        int64_t frame_duration_ns = frame->display_synced &&
++                                    frame->ideal_frame_duration > 0.0
++            ? MP_TIME_S_TO_NS(frame->ideal_frame_duration)
++            : frame->duration > 0.0 ? (int64_t)llrint(frame->duration) : 0;
++        p->next_timebase_rate_valid = avf_rate_sample(
++            &p->rate_est, p->next_media_pts_ns, frame_duration_ns,
++            p->timebase_rate > 0.0 ? p->timebase_rate : 1.0,
++            &p->next_timebase_rate);
++    }
+     return true;
+ }
+ 
+-- 
+2.51.0

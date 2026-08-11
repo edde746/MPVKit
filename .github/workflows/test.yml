@@ -61,6 +61,9 @@ jobs:
       - name: Test AO PCM lookahead
         run: ./scripts/test_ao_pcm_lookahead.sh
 
+      - name: Test AVFoundation timebase servo
+        run: ./scripts/test_avf_timebase_servo.sh
+
       - name: Install dependencies
         run: |
           brew install autoconf
