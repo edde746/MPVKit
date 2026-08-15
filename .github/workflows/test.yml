@@ -61,6 +61,9 @@ jobs:
       - name: Test AO PCM lookahead
         run: ./scripts/test_ao_pcm_lookahead.sh
 
+      - name: Test AO compressed-audio option
+        run: ./scripts/test_ao_compressed_audio_option.sh
+
       - name: Test AVFoundation timebase servo
         run: ./scripts/test_avf_timebase_servo.sh
 

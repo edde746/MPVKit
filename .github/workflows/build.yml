@@ -96,6 +96,9 @@ jobs:
       - name: Test AO PCM lookahead
         run: ./scripts/test_ao_pcm_lookahead.sh
 
+      - name: Test AO compressed-audio option
+        run: ./scripts/test_ao_compressed_audio_option.sh
+
       - name: Install dependencies
         run: |
           brew install autoconf automake libtool ninja
