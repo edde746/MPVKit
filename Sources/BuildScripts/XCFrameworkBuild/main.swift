@@ -64,7 +64,7 @@ enum Library: String, CaseIterable {
         case .libdovi:
             return "3.3.2"
         case .vulkan:
-            return "1.4.1"
+            return "1.4.2"
         case .libshaderc:  // compiling GLSL (OpenGL Shading Language) shaders into SPIR-V (Standard Portable Intermediate Representation - Vulkan) code
             return "2025.5.0"
         case .libuchardet:
