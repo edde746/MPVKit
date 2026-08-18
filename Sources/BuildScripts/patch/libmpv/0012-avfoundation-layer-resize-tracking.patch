@@ -1,8 +1,8 @@
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 7462acc..4f3f860 100644
+index d4c5906..ce6a430 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
-@@ -182,6 +182,13 @@
+@@ -207,6 +207,13 @@
      id app_resign_observer;
      bool presentation_suspended;
      atomic_bool pending_presentation_resync;
@@ -16,7 +16,7 @@ index 7462acc..4f3f860 100644
  };
  
  static CGFloat get_screen_scale(void)
-@@ -199,6 +206,37 @@ static CGFloat get_screen_scale(void)
+@@ -224,6 +231,37 @@ static CGFloat get_screen_scale(void)
  static void release_ci_compositor(struct priv *p);
  static const struct m_sub_options avfoundation_conf;
  
@@ -54,7 +54,7 @@ index 7462acc..4f3f860 100644
  static bool should_composite_into_video(struct priv *p)
  {
      return p->opts && (p->opts->composite_osd || p->opts->pip_composite_osd);
-@@ -789,6 +827,29 @@ static void update_avfoundation_options(struct vo *vo)
+@@ -825,6 +863,29 @@ static void update_avfoundation_options(struct vo *vo)
      sync_osd_layer_frame(vo);
  }
  
@@ -84,7 +84,7 @@ index 7462acc..4f3f860 100644
  static void record_deadline_drop(struct vo *vo)
  {
      struct priv *p = vo->priv;
-@@ -2887,6 +2948,27 @@ static int preinit(struct vo *vo)
+@@ -2932,6 +2993,27 @@ static int preinit(struct vo *vo)
      });
  #endif
  
@@ -112,7 +112,7 @@ index 7462acc..4f3f860 100644
      return 0;
  }
  
-@@ -3271,6 +3353,18 @@ static void uninit(struct vo *vo)
+@@ -3317,6 +3399,18 @@ static void uninit(struct vo *vo)
      }
  #endif
  
@@ -131,7 +131,7 @@ index 7462acc..4f3f860 100644
      mp_image_unrefp(&p->next_image);
      sample_buffer_renderer_flush(p->displayLayer, true);
      sample_buffer_renderer_flush(p->osdLayer, true);
-@@ -3352,6 +3446,8 @@ static int control(struct vo *vo, uint32_t request, void *data)
+@@ -3398,6 +3492,8 @@ static int control(struct vo *vo, uint32_t request, void *data)
      case VOCTRL_CHECK_EVENTS:
          if (atomic_exchange(&p->pending_presentation_resync, false))
              recover_display_layer(vo, "presentation resume", true);

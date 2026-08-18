@@ -38,10 +38,10 @@ the window's peak phase error.
  1 file changed, 293 insertions(+), 51 deletions(-)
 
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 50ffff1..ee761de 100644
+index e2291eb..d7f6f46 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
-@@ -70,6 +70,211 @@
+@@ -91,6 +91,211 @@
      bool osd_video_res;
  };
  
@@ -253,7 +253,7 @@ index 50ffff1..ee761de 100644
  struct priv {
      struct mp_hwdec_ctx hwctx;
      struct m_config_cache *opts_cache;
-@@ -81,6 +286,8 @@
+@@ -106,6 +311,8 @@
      int64_t next_present_host_ns;
      int64_t next_media_pts_ns;
      bool next_media_pts_valid;
@@ -262,7 +262,7 @@ index 50ffff1..ee761de 100644
      __strong AVSampleBufferDisplayLayer *displayLayer;
  
      // OSD/Subtitle support (timed AVSampleBufferDisplayLayer overlay mode)
-@@ -149,14 +356,19 @@
+@@ -174,14 +381,19 @@
      int64_t last_display_recovery_ns;
      int64_t last_video_enqueue_ns;
      int64_t last_media_pts_ns;
@@ -285,7 +285,7 @@ index 50ffff1..ee761de 100644
  
      // Periodic presentation-pacing diagnostics (logged every ~5s)
      int64_t diag_window_start_ns;
-@@ -164,6 +376,9 @@
+@@ -189,6 +401,9 @@
      int64_t diag_wait_total_ns;
      int diag_drop_count;
      int diag_anchor_count;
@@ -295,7 +295,7 @@ index 50ffff1..ee761de 100644
  
      // Track if OSD callback was invoked this frame
      bool osd_callback_invoked;
-@@ -393,19 +608,24 @@ static int64_t current_media_time_ns(struct priv *p)
+@@ -429,19 +644,24 @@ static int64_t sample_presentation_pts_ns(struct priv *p)
  
  static void reset_media_timing(struct priv *p)
  {
@@ -325,7 +325,7 @@ index 50ffff1..ee761de 100644
  }
  
  static void update_media_timebase_for_frame(struct vo *vo)
-@@ -421,37 +641,14 @@ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -457,37 +677,14 @@ static void update_media_timebase_for_frame(struct vo *vo)
      int64_t media_pts_ns = p->next_media_pts_ns;
  
      double rate = p->timebase_rate > 0.0 ? p->timebase_rate : 1.0;
@@ -370,7 +370,7 @@ index 50ffff1..ee761de 100644
      }
      if (p->playback_paused)
          rate = 0.0;
-@@ -460,16 +657,38 @@ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -496,16 +693,38 @@ static void update_media_timebase_for_frame(struct vo *vo)
          p->playback_paused || rate_changed;
  
      if (!should_anchor) {
@@ -416,7 +416,7 @@ index 50ffff1..ee761de 100644
          }
      }
  
-@@ -482,15 +701,16 @@ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -518,15 +737,16 @@ static void update_media_timebase_for_frame(struct vo *vo)
              MP_WARN(vo, "Failed to anchor AVFoundation media timebase: %d\n", (int)err);
          }
          p->timebase_rate = rate;
@@ -436,7 +436,7 @@ index 50ffff1..ee761de 100644
      p->last_media_pts_valid = true;
  }
  
-@@ -511,6 +731,7 @@ static void set_media_timebase_paused(struct vo *vo, bool paused)
+@@ -547,6 +767,7 @@ static void set_media_timebase_paused(struct vo *vo, bool paused)
              p->timebase, 0.0, media_time, source_time);
          if (err != noErr)
              MP_WARN(vo, "Failed to pause AVFoundation media timebase: %d\n", (int)err);
@@ -444,7 +444,7 @@ index 50ffff1..ee761de 100644
          p->timebase_paused = true;
          return;
      }
-@@ -926,15 +1147,22 @@ static void report_presentation_diagnostics(struct vo *vo)
+@@ -962,15 +1183,22 @@ static void report_presentation_diagnostics(struct vo *vo)
      if (now - p->diag_window_start_ns < MP_TIME_MS_TO_NS(5000))
          return;
  
@@ -470,7 +470,7 @@ index 50ffff1..ee761de 100644
      }
  
      p->diag_window_start_ns = now;
-@@ -942,6 +1170,8 @@ static void report_presentation_diagnostics(struct vo *vo)
+@@ -978,6 +1206,8 @@ static void report_presentation_diagnostics(struct vo *vo)
      p->diag_wait_total_ns = 0;
      p->diag_drop_count = 0;
      p->diag_anchor_count = 0;
@@ -479,7 +479,7 @@ index 50ffff1..ee761de 100644
  }
  
  static void dispatch_main_sync_safe(dispatch_block_t block)
-@@ -3268,6 +3498,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
+@@ -3314,6 +3544,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
          p->next_pts = MP_NOPTS_VALUE;
          p->next_present_host_ns = mp_time_ns();
          p->next_media_pts_valid = false;
@@ -487,7 +487,7 @@ index 50ffff1..ee761de 100644
          return true;
      }
  
-@@ -3285,6 +3516,17 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
+@@ -3331,6 +3562,17 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
      p->next_media_pts_ns = p->next_media_pts_valid
          ? media_pts_to_ns(pts)
          : current_media_time_ns(p);

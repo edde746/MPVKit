@@ -1,5 +1,5 @@
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index af1dc64..988a50d 100644
+index a5056ca..fe16972 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
 @@ -24,11 +24,13 @@
@@ -16,7 +16,7 @@ index af1dc64..988a50d 100644
  #include "video/mp_image.h"
  #include "video/hwdec.h"
  #include "sub/osd.h"
-@@ -136,6 +138,10 @@
+@@ -161,6 +163,10 @@
      int sw_pool_w, sw_pool_h;
      OSType sw_pool_format;
  
@@ -27,7 +27,7 @@ index af1dc64..988a50d 100644
      // Frame counter for periodic maintenance
      int frame_count;
      int not_ready_drop_count;
-@@ -229,6 +235,19 @@ static bool is_full_range_yuv_format(OSType format)
+@@ -254,6 +260,19 @@ static bool is_full_range_yuv_format(OSType format)
             format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
  }
  
@@ -47,7 +47,7 @@ index af1dc64..988a50d 100644
  static id<AVQueuedSampleBufferRendering> active_sample_buffer_renderer(
      AVSampleBufferDisplayLayer *displayLayer)
  {
-@@ -1125,19 +1144,20 @@ static void update_subtitle_bounds_from_parts(struct priv *p,
+@@ -1161,19 +1180,20 @@ static void update_subtitle_bounds_from_parts(struct priv *p,
      }
  }
  
@@ -79,7 +79,7 @@ index af1dc64..988a50d 100644
  }
  
  // Create software upload pool
-@@ -1231,6 +1251,117 @@ static bool create_osd_pool(struct vo *vo, int w, int h)
+@@ -1267,6 +1287,117 @@ static bool create_osd_pool(struct vo *vo, int w, int h)
          &p->osd_pool_h, NULL, w, h, kCVPixelFormatType_32BGRA, "OSD overlay");
  }
  
@@ -197,7 +197,7 @@ index af1dc64..988a50d 100644
  // Upload a software-decoded frame to CVPixelBuffer
  static CVPixelBufferRef upload_software_frame(struct vo *vo, struct mp_image *mpi)
  {
-@@ -1261,7 +1392,15 @@ static CVPixelBufferRef upload_software_frame(struct vo *vo, struct mp_image *mp
+@@ -1297,7 +1428,15 @@ static CVPixelBufferRef upload_software_frame(struct vo *vo, struct mp_image *mp
  
      size_t planeCount = CVPixelBufferGetPlaneCount(pixbuf);
  
@@ -214,7 +214,7 @@ index af1dc64..988a50d 100644
          // Non-planar format
          void *dst = CVPixelBufferGetBaseAddress(pixbuf);
          size_t dstStride = CVPixelBufferGetBytesPerRow(pixbuf);
-@@ -1279,7 +1418,7 @@ static CVPixelBufferRef upload_software_frame(struct vo *vo, struct mp_image *mp
+@@ -1315,7 +1454,7 @@ static CVPixelBufferRef upload_software_frame(struct vo *vo, struct mp_image *mp
              }
          }
      } else {
@@ -223,7 +223,7 @@ index af1dc64..988a50d 100644
          for (size_t plane = 0; plane < planeCount && plane < MP_MAX_PLANES; plane++) {
              void *dst = CVPixelBufferGetBaseAddressOfPlane(pixbuf, plane);
              size_t dstStride = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, plane);
-@@ -2736,20 +2875,32 @@ static CMSampleBufferRef create_video_sample_buffer(struct vo *vo, mp_image_t *m
+@@ -2781,20 +2920,32 @@ static CMSampleBufferRef create_video_sample_buffer(struct vo *vo, mp_image_t *m
          // ratio; AVSampleBufferDisplayLayer only honors it via a buffer attachment.
          tag_pixel_buffer_pixel_aspect(vo, finalBuffer);
  
@@ -268,7 +268,7 @@ index af1dc64..988a50d 100644
  
          if (err != noErr || !buf) {
              MP_ERR(vo, "Failed to create sample buffer: %d\n", (int)err);
-@@ -2940,15 +3091,18 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
+@@ -2986,15 +3137,18 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
  
  static int query_format(struct vo *vo, int format)
  {
@@ -296,7 +296,7 @@ index af1dc64..988a50d 100644
  }
  
  static void clear_subtitle_cache(struct priv *p)
-@@ -3064,6 +3218,11 @@ static void uninit(struct vo *vo)
+@@ -3110,6 +3264,11 @@ static void uninit(struct vo *vo)
          p->swUploadPool = NULL;
      }
  

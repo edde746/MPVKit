@@ -7,18 +7,18 @@ Subject: [PATCH] AVfoundation video output
  meson.build                 |   15 +
  meson.options               |    1 +
  video/out/vo.c              |    4 +
- video/out/vo_avfoundation.m | 2666 +++++++++++++++++++++++++++++++++++
- 4 files changed, 2686 insertions(+)
+ video/out/vo_avfoundation.m | 2818 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 2838 insertions(+)
  create mode 100644 video/out/vo_avfoundation.m
 
 diff --git a/meson.build b/meson.build
-index 7572769e0e..d74fae0319 100644
+index f6f8e7f..55612b4 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -813,6 +813,21 @@ if features['avfoundation']
+@@ -823,6 +823,21 @@ if features['avfoundation']
      sources += files('audio/out/ao_avfoundation.m')
  endif
-
+ 
 +vo_avfoundation_frameworks = ['AVFoundation', 'CoreMedia', 'CoreVideo',
 +                             'CoreImage', 'QuartzCore', 'Metal']
 +if cc.has_header('UIKit/UIKit.h')
@@ -38,10 +38,10 @@ index 7572769e0e..d74fae0319 100644
                         'AudioUnit', 'AudioToolbox'], required: get_option('coreaudio'))
  features += {'coreaudio': coreaudio.found()}
 diff --git a/meson.options b/meson.options
-index dae0a333ef..b8d3ae30ba 100644
+index 81bc931..1ac622a 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -60,6 +60,7 @@ option('d3d11', type: 'feature', value: 'auto', description: 'Direct3D 11 video
+@@ -62,6 +62,7 @@ option('d3d11', type: 'feature', value: 'auto', description: 'Direct3D 11 video
  option('direct3d', type: 'feature', value: 'auto', description: 'Direct3D support')
  option('dmabuf-wayland', type: 'feature', value: 'auto', description: 'dmabuf-wayland video output')
  option('drm', type: 'feature', value: 'auto', description: 'Direct Rendering Manager (DRM)')
@@ -50,19 +50,19 @@ index dae0a333ef..b8d3ae30ba 100644
  option('egl-android', type: 'feature', value: 'auto', description: 'Android EGL support')
  option('egl-angle', type: 'feature', value: 'auto', description: 'OpenGL ANGLE headers')
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 7b5df4b886..3b8bbd0b39 100644
+index c9cde30..582acbe 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -46,6 +46,7 @@
  #include "osdep/io.h"
  #include "osdep/threads.h"
-
+ 
 +extern const struct vo_driver video_out_avfoundation;
  extern const struct vo_driver video_out_mediacodec_embed;
  extern const struct vo_driver video_out_x11;
  extern const struct vo_driver video_out_vdpau;
-@@ -69,7 +70,10 @@ extern const struct vo_driver video_out_kitty;
-
+@@ -69,6 +70,9 @@ extern const struct vo_driver video_out_kitty;
+ 
  static const struct vo_driver *const video_out_drivers[] =
  {
 +#if HAVE_VO_AVFOUNDATION
@@ -71,13 +71,12 @@ index 7b5df4b886..3b8bbd0b39 100644
      // high-quality and well-supported VOs first:
      &video_out_gpu_next,
      &video_out_gpu,
-
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
 new file mode 100644
-index 0000000000..1b3e13aece
+index 0000000..9b7b4e1
 --- /dev/null
 +++ b/video/out/vo_avfoundation.m
-@@ -0,0 +1,2756 @@
+@@ -0,0 +1,2818 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -136,16 +135,41 @@ index 0000000000..1b3e13aece
 +    AVF_OSD_DRAW_COREGRAPHICS,
 +};
 +
++// How enqueued samples are timed against the display layer's timebase.
++//
++// Host mode reproduces the original single-clock design: samples carry
++// mpv's scheduled display time (frame->pts) and the timebase free-runs on
++// the host clock at rate 1.0. mpv's audio-slaved scheduler re-times every
++// frame, so audio/host clock skew is absorbed continuously in
++// microsecond-scale per-frame adjustments and no timing state accumulates
++// in the VO. The cost: the layer cannot pause autonomously, so up to
++// queue-lead-ms of already-queued frames still present after a pause.
++//
++// Media mode stamps container PTS against a media timebase that is
++// anchored and rate-servoed to follow mpv's schedule. PiP requires it (the
++// system PiP UI reads media time and playback rate off the layer's
++// timebase), but any error between the two clock domains can only be
++// retired by rate slewing or a visible re-anchor snap (plezy#1776).
++enum avf_presentation_mode {
++    AVF_PRESENTATION_MEDIA = 0,
++    AVF_PRESENTATION_HOST = 1,
++};
++
 +struct avfoundation_opts {
 +    bool composite_osd;
 +    bool pip_composite_osd;
 +    int queue_lead_ms;
++    int presentation;
 +};
 +
 +struct priv {
 +    struct mp_hwdec_ctx hwctx;
 +    struct m_config_cache *opts_cache;
 +    struct avfoundation_opts *opts;
++    // Presentation mode is latched at preinit; runtime option changes are
++    // deliberately ignored because switching would require re-seeding the
++    // layer timebase under queued samples.
++    bool presentation_host;
 +
 +    struct mp_image *next_image;
 +    double next_pts;
@@ -355,6 +379,17 @@ index 0000000000..1b3e13aece
 +    if (p->timebase)
 +        return cm_time_to_ns(CMTimebaseGetTime(p->timebase));
 +    return 0;
++}
++
++// Presentation timestamp for enqueued video/OSD samples, in the unit the
++// active mode's timebase runs in: mpv's scheduled host display time in
++// host mode, container media PTS in media mode.
++static int64_t sample_presentation_pts_ns(struct priv *p)
++{
++    if (p->presentation_host)
++        return p->next_present_host_ns > 0 ? p->next_present_host_ns
++                                           : mp_time_ns();
++    return current_media_time_ns(p);
 +}
 +
 +static void reset_media_timing(struct priv *p)
@@ -2298,9 +2333,18 @@ index 0000000000..1b3e13aece
 +        return -1;
 +    }
 +
++    p->presentation_host = p->opts->presentation == AVF_PRESENTATION_HOST;
 +    reset_media_timing(p);
-+    CMTimebaseSetTime(p->timebase, cm_time_from_ns(0));
-+    CMTimebaseSetRate(p->timebase, 0.0);
++    if (p->presentation_host) {
++        // mp_time_ns() and the CoreMedia host clock advance together on
++        // Apple platforms, so a rate-1.0 timebase seeded with mp_time makes
++        // timebase time equal to mpv host time for the layer's lifetime.
++        CMTimebaseSetTime(p->timebase, cm_time_from_ns(mp_time_ns()));
++        CMTimebaseSetRate(p->timebase, 1.0);
++    } else {
++        CMTimebaseSetTime(p->timebase, cm_time_from_ns(0));
++        CMTimebaseSetRate(p->timebase, 0.0);
++    }
 +    AVSampleBufferDisplayLayer *displayLayer = [p->displayLayer retain];
 +    CMTimebaseRef timebase = p->timebase;
 +    dispatch_main_sync_safe(^{
@@ -2450,7 +2494,7 @@ index 0000000000..1b3e13aece
 +        }
 +
 +        CMSampleTimingInfo info = {
-+            .presentationTimeStamp = cm_time_from_ns(current_media_time_ns(p)),
++            .presentationTimeStamp = cm_time_from_ns(sample_presentation_pts_ns(p)),
 +            .duration = kCMTimeInvalid,
 +            .decodeTimeStamp = kCMTimeInvalid
 +        };
@@ -2521,14 +2565,15 @@ index 0000000000..1b3e13aece
 +        render_osd(vo, p->next_pts);
 +
 +        osd_buf = create_osd_sample_buffer(vo,
-+            current_media_time_ns(p), &osd_needed);
++            sample_presentation_pts_ns(p), &osd_needed);
 +
 +        CMSampleBufferRef video_buf = create_video_sample_buffer(vo, p->next_image);
 +
 +        bool osd_enqueued = !osd_needed;
 +
 +        if (video_buf && wait_until_ready_for_more_media_data(vo, p->next_present_host_ns)) {
-+            update_media_timebase_for_frame(vo);
++            if (!p->presentation_host)
++                update_media_timebase_for_frame(vo);
 +
 +            if (osd_buf) {
 +                osd_enqueued = enqueue_osd_sample(vo, osd_buf);
@@ -2775,16 +2820,24 @@ index 0000000000..1b3e13aece
 +        p->timebase_paused = was_paused;
 +        sample_buffer_renderer_flush(p->displayLayer, true);
 +        sample_buffer_renderer_flush(p->osdLayer, true);
-+        if (p->timebase) {
++        if (p->presentation_host && p->timebase) {
++            // Fresh host-time samples arrive with future timestamps; the
++            // free-running timebase needs no correction, only a re-seed in
++            // case CoreMedia clamped it while torn between videos.
++            CMTimebaseSetTime(p->timebase, cm_time_from_ns(mp_time_ns()));
++            CMTimebaseSetRate(p->timebase, 1.0);
++        } else if (p->timebase) {
 +            CMTimebaseSetTime(p->timebase, cm_time_from_ns(0));
 +            CMTimebaseSetRate(p->timebase, 0.0);
 +        }
 +        return VO_TRUE;
 +    case VOCTRL_PAUSE:
-+        set_media_timebase_paused(vo, true);
++        if (!p->presentation_host)
++            set_media_timebase_paused(vo, true);
 +        return VO_TRUE;
 +    case VOCTRL_RESUME:
-+        set_media_timebase_paused(vo, false);
++        if (!p->presentation_host)
++            set_media_timebase_paused(vo, false);
 +        return VO_TRUE;
 +    case VOCTRL_REDRAW:
 +        p->osd_change_id = 0;
@@ -2807,6 +2860,9 @@ index 0000000000..1b3e13aece
 +    {"composite-osd", OPT_BOOL(composite_osd)},
 +    {"pip-composite-osd", OPT_BOOL(pip_composite_osd)},
 +    {"queue-lead-ms", OPT_INT(queue_lead_ms), M_RANGE(0, 1000)},
++    {"presentation", OPT_CHOICE(presentation,
++        {"media", AVF_PRESENTATION_MEDIA},
++        {"host", AVF_PRESENTATION_HOST})},
 +    {0},
 +};
 +
@@ -2815,7 +2871,12 @@ index 0000000000..1b3e13aece
 +    .opts = avfoundation_options,
 +    .size = sizeof(struct avfoundation_opts),
 +    .defaults = &(const struct avfoundation_opts){
-+        .queue_lead_ms = TARGET_OS_TV ? 500 : 128,
++        .queue_lead_ms = 128,
++        // tvOS has no PiP, so nothing needs the media timebase there; the
++        // host-time model is the one that never accumulates clock drift
++        // against mpv's audio-slaved schedule (plezy#1776).
++        .presentation = TARGET_OS_TV ? AVF_PRESENTATION_HOST
++                                     : AVF_PRESENTATION_MEDIA,
 +    },
 +};
 +

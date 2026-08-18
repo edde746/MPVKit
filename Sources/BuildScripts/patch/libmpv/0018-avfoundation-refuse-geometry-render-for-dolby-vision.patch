@@ -20,10 +20,10 @@ instead.
  1 file changed, 17 insertions(+)
 
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 9c437dd..a5c372d 100644
+index c253d27..475201d 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
-@@ -390,6 +390,9 @@ static double avf_servo_rate(int64_t error_ns, double nominal_rate,
+@@ -415,6 +415,9 @@ static double avf_servo_rate(int64_t error_ns, double nominal_rate,
      // Avoid logging every frame if geometry rendering repeatedly fails.
      bool geometry_render_failure_logged;
  
@@ -33,7 +33,7 @@ index 9c437dd..a5c372d 100644
      // App-active presentation resync (iOS/tvOS). The system suspends the
      // autonomous AVSampleBufferDisplayLayer on resign-active without setting
      // requiresFlushToResumeDecoding, so we force a layer recovery on resume.
-@@ -3244,6 +3247,20 @@ static CMSampleBufferRef create_video_sample_buffer(struct vo *vo, mp_image_t *m
+@@ -3289,6 +3292,20 @@ static CMSampleBufferRef create_video_sample_buffer(struct vo *vo, mp_image_t *m
          bool needsRelease = false;
  
          bool applyGeometry = should_apply_video_geometry(vo);

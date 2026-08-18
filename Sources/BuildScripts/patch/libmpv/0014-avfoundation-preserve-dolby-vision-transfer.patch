@@ -8,10 +8,10 @@ Subject: [PATCH] fix(avfoundation): preserve Dolby Vision transfer metadata
  1 file changed, 21 insertions(+)
 
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 4f3f860..004537a 100644
+index ce6a430..e2291eb 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
-@@ -1120,6 +1120,22 @@ static void tag_pixel_buffer_color_metadata(CVPixelBufferRef pixbuf,
+@@ -1156,6 +1156,22 @@ static void tag_pixel_buffer_color_metadata(CVPixelBufferRef pixbuf,
          set_colorspace_from_attachments(pixbuf);
  }
  
@@ -34,7 +34,7 @@ index 4f3f860..004537a 100644
  static void tag_pixel_buffer_pixel_aspect(struct vo *vo, CVPixelBufferRef pixbuf)
  {
      if (!pixbuf || !vo->params)
-@@ -3051,6 +3067,11 @@ static CMSampleBufferRef create_video_sample_buffer(struct vo *vo, mp_image_t *m
+@@ -3096,6 +3112,11 @@ static CMSampleBufferRef create_video_sample_buffer(struct vo *vo, mp_image_t *m
          // ratio; AVSampleBufferDisplayLayer only honors it via a buffer attachment.
          tag_pixel_buffer_pixel_aspect(vo, finalBuffer);
  

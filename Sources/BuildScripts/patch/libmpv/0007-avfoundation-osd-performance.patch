@@ -1,5 +1,5 @@
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 18ed915..8cd65c1 100644
+index 9b7b4e1..e585f7d 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
 @@ -18,6 +18,10 @@
@@ -13,16 +13,16 @@ index 18ed915..8cd65c1 100644
  #include <libavutil/hwcontext.h>
  #include <libavutil/hwcontext_videotoolbox.h>
  #include "common/common.h"
-@@ -60,6 +64,8 @@
-     bool composite_osd;
+@@ -81,6 +85,8 @@
      bool pip_composite_osd;
      int queue_lead_ms;
+     int presentation;
 +    int osd_max_height;
 +    bool osd_video_res;
  };
  
  struct priv {
-@@ -86,6 +92,34 @@
+@@ -111,6 +117,34 @@
      int osd_pool_w, osd_pool_h;
      bool osd_needs_enqueue;
  
@@ -57,7 +57,7 @@ index 18ed915..8cd65c1 100644
      // Compositing mode support
      __strong id<MTLDevice> mtlDevice;
      __strong CIContext *ciContext;
-@@ -645,6 +679,8 @@ static void update_avfoundation_options(struct vo *vo)
+@@ -681,6 +715,8 @@ static void update_avfoundation_options(struct vo *vo)
      bool old_composite_osd = p->opts->composite_osd;
      bool old_pip_composite_osd = p->opts->pip_composite_osd;
      int old_queue_lead_ms = p->opts->queue_lead_ms;
@@ -66,7 +66,7 @@ index 18ed915..8cd65c1 100644
  
      if (!m_config_cache_update(p->opts_cache))
          return;
-@@ -652,17 +688,29 @@ static void update_avfoundation_options(struct vo *vo)
+@@ -688,17 +724,29 @@ static void update_avfoundation_options(struct vo *vo)
      if (old_queue_lead_ms != p->opts->queue_lead_ms)
          vo_set_queue_params(vo, MP_TIME_MS_TO_NS(p->opts->queue_lead_ms), 1);
  
@@ -103,7 +103,7 @@ index 18ed915..8cd65c1 100644
          release_ci_compositor(p);
      if (p->osdLayer)
          sample_buffer_renderer_flush(p->osdLayer, true);
-@@ -1036,36 +1084,31 @@ static int clip_u10(double value)
+@@ -1072,36 +1120,31 @@ static int clip_u10(double value)
      return MPCLAMP((int)(value + 0.5), 0, 1023);
  }
  
@@ -156,7 +156,7 @@ index 18ed915..8cd65c1 100644
  }
  
  // Map mpv image format to CVPixelBuffer format
-@@ -1091,9 +1134,85 @@ static bool create_sw_upload_pool(struct vo *vo, int w, int h, OSType format)
+@@ -1127,9 +1170,85 @@ static bool create_sw_upload_pool(struct vo *vo, int w, int h, OSType format)
          &p->sw_pool_h, &p->sw_pool_format, w, h, format, "software upload");
  }
  
@@ -242,7 +242,7 @@ index 18ed915..8cd65c1 100644
      return create_pixel_buffer_pool(vo, &p->osdPool, &p->osd_pool_w,
          &p->osd_pool_h, NULL, w, h, kCVPixelFormatType_32BGRA, "OSD overlay");
  }
-@@ -1266,9 +1385,9 @@ static int get_direct_osd_draw_path(struct sub_bitmaps *imgs)
+@@ -1302,9 +1421,9 @@ static int get_direct_osd_draw_path(struct sub_bitmaps *imgs)
      return path;
  }
  
@@ -255,7 +255,7 @@ index 18ed915..8cd65c1 100644
  {
      const unsigned int r = (color >> 24) & 0xff;
      const unsigned int g = (color >> 16) & 0xff;
-@@ -1304,9 +1423,9 @@ static void blend_libass_bgra(uint8_t *dst, size_t dst_stride,
+@@ -1340,9 +1459,9 @@ static void blend_libass_bgra(uint8_t *dst, size_t dst_stride,
      }
  }
  
@@ -268,7 +268,7 @@ index 18ed915..8cd65c1 100644
  {
      for (int y = 0; y < h; y++) {
          uint32_t *srcrow = (uint32_t *)src;
-@@ -1342,6 +1461,153 @@ static void blend_bgra_over_bgra(uint8_t *dst, size_t dst_stride,
+@@ -1378,6 +1497,153 @@ static void blend_bgra_over_bgra(uint8_t *dst, size_t dst_stride,
      }
  }
  
@@ -422,7 +422,7 @@ index 18ed915..8cd65c1 100644
  static void draw_direct_libass_bitmap(uint8_t *base, size_t stride,
                                        int w, int h, struct sub_bitmap *sb)
  {
-@@ -1464,7 +1730,26 @@ static CVPixelBufferRef create_empty_osd_pixel_buffer(struct vo *vo)
+@@ -1500,7 +1766,26 @@ static CVPixelBufferRef create_empty_osd_pixel_buffer(struct vo *vo)
          CVPixelBufferRelease(pixbuf);
          return NULL;
      }
@@ -450,7 +450,7 @@ index 18ed915..8cd65c1 100644
  
      CVPixelBufferUnlockBaseAddress(pixbuf, 0);
      return pixbuf;
-@@ -1493,7 +1778,9 @@ static CVPixelBufferRef render_subtitle_pixel_buffer(struct vo *vo,
+@@ -1529,7 +1814,9 @@ static CVPixelBufferRef render_subtitle_pixel_buffer(struct vo *vo,
          return NULL;
      }
  
@@ -460,7 +460,7 @@ index 18ed915..8cd65c1 100644
          CVPixelBufferUnlockBaseAddress(pixbuf, 0);
          return pixbuf;
      }
-@@ -1515,6 +1802,7 @@ static CVPixelBufferRef render_subtitle_pixel_buffer(struct vo *vo,
+@@ -1551,6 +1838,7 @@ static CVPixelBufferRef render_subtitle_pixel_buffer(struct vo *vo,
  
      draw_subtitle_bitmaps(context, imgs, h);
      CGContextRelease(context);
@@ -468,7 +468,7 @@ index 18ed915..8cd65c1 100644
  
      CVPixelBufferUnlockBaseAddress(pixbuf, 0);
      return pixbuf;
-@@ -1603,6 +1891,7 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
+@@ -1639,6 +1927,7 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
      // Clear subtitles when there are none
      if (!imgs || imgs->num_parts == 0) {
          if (p->has_subtitle || p->cachedSubtitleImage || p->cachedSubtitleBuffer) {
@@ -476,7 +476,7 @@ index 18ed915..8cd65c1 100644
              p->has_subtitle = false;
              p->osd_change_id = 0;  // Reset change_id so next subtitle renders
              if (p->cachedSubtitleImage) {
-@@ -1627,9 +1916,11 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
+@@ -1663,9 +1952,11 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
          (!need_buffer || p->cachedSubtitleBuffer);
      if (imgs->change_id != 0 && imgs->change_id == p->osd_change_id &&
          p->has_subtitle && has_cached_subtitle) {
@@ -488,7 +488,7 @@ index 18ed915..8cd65c1 100644
      bool rendered = false;
      if (need_image) {
          CGImageRef subtitleImage = render_subtitle_image(vo, imgs);
-@@ -1650,7 +1941,12 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
+@@ -1686,7 +1977,12 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
              if (p->cachedSubtitleBuffer)
                  CVPixelBufferRelease(p->cachedSubtitleBuffer);
              p->cachedSubtitleBuffer = subtitleBuffer;
@@ -502,7 +502,7 @@ index 18ed915..8cd65c1 100644
              rendered = true;
          }
      }
-@@ -1658,6 +1954,19 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
+@@ -1694,6 +1990,19 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
      if (!rendered)
          return;
  
@@ -522,7 +522,7 @@ index 18ed915..8cd65c1 100644
      p->osd_change_id = imgs->change_id;
      p->has_subtitle = true;
      if (should_use_inline_osd_layer(p))
-@@ -1666,7 +1975,8 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
+@@ -1702,7 +2011,8 @@ static void draw_osd_cb(void *ctx, struct sub_bitmaps *imgs)
  
  // Render OSD/subtitles for an already computed geometry.
  static bool render_osd_with_geometry(struct vo *vo, double pts,
@@ -532,7 +532,7 @@ index 18ed915..8cd65c1 100644
  {
      struct priv *p = vo->priv;
  
-@@ -1682,12 +1992,45 @@ static bool render_osd_with_geometry(struct vo *vo, double pts,
+@@ -1718,12 +2028,45 @@ static bool render_osd_with_geometry(struct vo *vo, double pts,
      if (geometry.w <= 0 || geometry.h <= 0 || osd_res.w <= 0 || osd_res.h <= 0)
          return false;
  
@@ -580,7 +580,7 @@ index 18ed915..8cd65c1 100644
  
      static const bool formats[SUBBITMAP_COUNT] = {
          [SUBBITMAP_BGRA] = true,
-@@ -1727,7 +2070,7 @@ static void render_osd(struct vo *vo, double pts)
+@@ -1763,7 +2106,7 @@ static void render_osd(struct vo *vo, double pts)
      int frame_h = p->next_image ? p->next_image->h : 0;
      struct avf_render_geometry geometry = get_render_geometry(vo, frame_w, frame_h);
  
@@ -589,7 +589,7 @@ index 18ed915..8cd65c1 100644
  }
  
  static bool ensure_ci_compositor(struct vo *vo)
-@@ -2427,6 +2770,42 @@ static bool enqueue_video_sample(struct vo *vo, CMSampleBufferRef buf)
+@@ -2472,6 +2815,42 @@ static bool enqueue_video_sample(struct vo *vo, CMSampleBufferRef buf)
      return true;
  }
  
@@ -632,7 +632,7 @@ index 18ed915..8cd65c1 100644
  static void flip_page(struct vo *vo)
  {
      struct priv *p = vo->priv;
-@@ -2438,22 +2817,46 @@ static void flip_page(struct vo *vo)
+@@ -2483,23 +2862,47 @@ static void flip_page(struct vo *vo)
          CMSampleBufferRef osd_buf = NULL;
          bool osd_needed = false;
  
@@ -644,8 +644,8 @@ index 18ed915..8cd65c1 100644
          render_osd(vo, p->next_pts);
  
 -        osd_buf = create_osd_sample_buffer(vo,
--            current_media_time_ns(p), &osd_needed);
-+        int64_t osd_pts_ns = current_media_time_ns(p);
+-            sample_presentation_pts_ns(p), &osd_needed);
++        int64_t osd_pts_ns = sample_presentation_pts_ns(p);
 +        osd_buf = create_osd_sample_buffer(vo, osd_pts_ns, &osd_needed);
  
 +        int64_t t = mp_time_ns();
@@ -661,7 +661,8 @@ index 18ed915..8cd65c1 100644
 +        p->perf.wait_ns += mp_time_ns() - t;
 +
 +        if (video_ready) {
-             update_media_timebase_for_frame(vo);
+             if (!p->presentation_host)
+                 update_media_timebase_for_frame(vo);
  
              if (osd_buf) {
 +                t = mp_time_ns();
@@ -683,7 +684,7 @@ index 18ed915..8cd65c1 100644
              }
  
              enqueue_video_sample(vo, video_buf);
-@@ -2466,6 +2869,8 @@ static void flip_page(struct vo *vo)
+@@ -2512,6 +2915,8 @@ static void flip_page(struct vo *vo)
              CFRelease(osd_buf);
          if (video_buf)
              CFRelease(video_buf);
@@ -692,7 +693,7 @@ index 18ed915..8cd65c1 100644
      }
  
      // Flush excess buffers every ~60 frames to prevent memory growth
-@@ -2478,8 +2883,14 @@ static void flip_page(struct vo *vo)
+@@ -2524,8 +2929,14 @@ static void flip_page(struct vo *vo)
              CVPixelBufferPoolFlush(p->osdPool, kCVPixelBufferPoolFlushExcessBuffers);
          if (p->swUploadPool)
              CVPixelBufferPoolFlush(p->swUploadPool, kCVPixelBufferPoolFlushExcessBuffers);
@@ -707,7 +708,7 @@ index 18ed915..8cd65c1 100644
      mp_image_unrefp(&p->next_image);
  }
  
-@@ -2576,6 +2987,8 @@ static void uninit(struct vo *vo)
+@@ -2622,6 +3033,8 @@ static void uninit(struct vo *vo)
  {
      struct priv *p = vo->priv;
  
@@ -716,7 +717,7 @@ index 18ed915..8cd65c1 100644
  #if TARGET_OS_IPHONE
      if (p->app_resign_observer || p->app_active_observer) {
          dispatch_main_sync_safe(^{
-@@ -2630,6 +3043,7 @@ static void uninit(struct vo *vo)
+@@ -2676,6 +3089,7 @@ static void uninit(struct vo *vo)
          CVPixelBufferPoolRelease(p->osdPool);
          p->osdPool = NULL;
      }
@@ -724,10 +725,10 @@ index 18ed915..8cd65c1 100644
  
      if (p->swUploadPool) {
          CVPixelBufferPoolRelease(p->swUploadPool);
-@@ -2727,6 +3141,12 @@ static int control(struct vo *vo, uint32_t request, void *data)
-     {"composite-osd", OPT_BOOL(composite_osd)},
-     {"pip-composite-osd", OPT_BOOL(pip_composite_osd)},
-     {"queue-lead-ms", OPT_INT(queue_lead_ms), M_RANGE(0, 1000)},
+@@ -2784,6 +3198,12 @@ static int control(struct vo *vo, uint32_t request, void *data)
+     {"presentation", OPT_CHOICE(presentation,
+         {"media", AVF_PRESENTATION_MEDIA},
+         {"host", AVF_PRESENTATION_HOST})},
 +    // Cap the OSD/subtitle rasterization height (0 = display resolution).
 +    // Inline OSD layer mode only; the layer upscales the result.
 +    {"osd-max-height", OPT_INT(osd_max_height), M_RANGE(0, 4320)},

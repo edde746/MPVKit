@@ -1,8 +1,8 @@
 diff --git a/video/out/vo_avfoundation.m b/video/out/vo_avfoundation.m
-index 988a50d..7462acc 100644
+index fe16972..d4c5906 100644
 --- a/video/out/vo_avfoundation.m
 +++ b/video/out/vo_avfoundation.m
-@@ -155,6 +155,15 @@
+@@ -180,6 +180,15 @@
      bool timebase_paused;
      bool playback_paused;
      double timebase_rate;
@@ -18,7 +18,7 @@ index 988a50d..7462acc 100644
  
      // Track if OSD callback was invoked this frame
      bool osd_callback_invoked;
-@@ -354,24 +363,11 @@ static void reset_media_timing(struct priv *p)
+@@ -390,24 +399,11 @@ static void reset_media_timing(struct priv *p)
      p->timebase_anchor_valid = false;
      p->timebase_paused = false;
      p->playback_paused = false;
@@ -48,7 +48,7 @@ index 988a50d..7462acc 100644
  }
  
  static void update_media_timebase_for_frame(struct vo *vo)
-@@ -385,18 +381,58 @@ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -421,18 +417,58 @@ static void update_media_timebase_for_frame(struct vo *vo)
          ? p->next_present_host_ns
          : now;
      int64_t media_pts_ns = p->next_media_pts_ns;
@@ -112,7 +112,7 @@ index 988a50d..7462acc 100644
      }
  
      if (should_anchor) {
-@@ -410,6 +446,9 @@ static void update_media_timebase_for_frame(struct vo *vo)
+@@ -446,6 +482,9 @@ static void update_media_timebase_for_frame(struct vo *vo)
          p->timebase_rate = rate;
          p->timebase_anchor_valid = true;
          p->timebase_paused = p->playback_paused;
@@ -122,7 +122,7 @@ index 988a50d..7462acc 100644
      }
  
      p->last_media_pts_ns = media_pts_ns;
-@@ -750,6 +789,14 @@ static void update_avfoundation_options(struct vo *vo)
+@@ -786,6 +825,14 @@ static void update_avfoundation_options(struct vo *vo)
      sync_osd_layer_frame(vo);
  }
  
@@ -137,7 +137,7 @@ index 988a50d..7462acc 100644
  static bool wait_until_ready_for_more_media_data(struct vo *vo, int64_t present_host_ns)
  {
      struct priv *p = vo->priv;
-@@ -762,33 +809,80 @@ static bool wait_until_ready_for_more_media_data(struct vo *vo, int64_t present_
+@@ -798,33 +845,80 @@ static bool wait_until_ready_for_more_media_data(struct vo *vo, int64_t present_
          return true;
      }
  
@@ -227,7 +227,7 @@ index 988a50d..7462acc 100644
  static void dispatch_main_sync_safe(dispatch_block_t block)
  {
      if ([NSThread isMainThread]) {
-@@ -2978,6 +3072,8 @@ static void flip_page(struct vo *vo)
+@@ -3023,6 +3117,8 @@ static void flip_page(struct vo *vo)
      if (atomic_exchange(&p->pending_presentation_resync, false))
          recover_display_layer(vo, "presentation resume", true);
  
