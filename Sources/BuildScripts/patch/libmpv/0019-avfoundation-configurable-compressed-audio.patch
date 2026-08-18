@@ -1,5 +1,5 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index 42f3d72..0a6d23a 100644
+index 545cb1a..102c53d 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
 @@ -109,6 +109,10 @@ - (void)invalidate;
@@ -13,10 +13,10 @@ index 42f3d72..0a6d23a 100644
  #if TARGET_OS_OSX
      // The bounded PCM lookahead is macOS-only. That is where --volume is
      // driven from a slider or the keyboard and the lag is felt; on tvOS and
-@@ -980,6 +984,11 @@ static int init(struct ao *ao)
+@@ -1000,6 +1004,11 @@ static int init(struct ao *ao)
      AudioChannelLayout *layout = NULL;
      bool spdif = af_fmt_is_spdif(ao->format);
-
+ 
 +    if (spdif && !p->opt_accept_compressed) {
 +        MP_VERBOSE(ao, "compressed audio disabled; trying next audio output\n");
 +        return CONTROL_ERROR;
@@ -25,7 +25,7 @@ index 42f3d72..0a6d23a 100644
      if (!spdif) {
          atomic_store(&spdif_format_latch[0], false);
          atomic_store(&spdif_format_latch[1], false);
-@@ -1283,6 +1292,7 @@ static void uninit(struct ao *ao)
+@@ -1303,6 +1312,7 @@ static void uninit(struct ao *ao)
      .list_devs      = ca_get_device_list,
      .priv_size      = sizeof(struct priv),
      .priv_defaults  = &(const struct priv){
@@ -33,7 +33,7 @@ index 42f3d72..0a6d23a 100644
          // Well inside the renderer's own depth, so the queue still absorbs
          // scheduling jitter, while cutting the delay before a volume change
          // is audible to a fraction of what it was.
-@@ -1294,6 +1304,7 @@ static void uninit(struct ao *ao)
+@@ -1314,6 +1324,7 @@ static void uninit(struct ao *ao)
  #if TARGET_OS_OSX
          {"max-lookahead", OPT_DOUBLE(opt_max_lookahead), M_RANGE(0, 10)},
  #endif

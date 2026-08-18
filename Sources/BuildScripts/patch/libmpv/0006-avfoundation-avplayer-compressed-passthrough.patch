@@ -1,5 +1,5 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index 2a83027..240d95c 100644
+index 2a83027..78da5e1 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
 @@ -25,6 +25,9 @@
@@ -128,7 +128,7 @@ index 2a83027..240d95c 100644
  static int64_t CMTimeGetNanoseconds(CMTime time)
  {
      time = CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_Default);
-@@ -58,6 +161,398 @@ static CMTime CMTimeFromNanoseconds(int64_t time)
+@@ -58,6 +161,418 @@ static CMTime CMTimeFromNanoseconds(int64_t time)
      return CMTimeMake(time, 1000000000);
  }
  
@@ -182,6 +182,26 @@ index 2a83027..240d95c 100644
 +    if (!CMTIME_IS_NUMERIC(t))
 +        return 0;
 +    return MPCLAMP(CMTimeGetNanoseconds(t), 0, p->es_pts);
++}
++
++// Most-advanced playhead estimate, used only to pace the feed. The item's
++// timebase and its chunk-updated currentTime can disagree by a constant
++// offset on some HDMI routes; pacing the 2s feed lead against the laggier
++// reading silently thins AVPlayer's real buffer by that offset until
++// playback reaches the write head and audibly stalls on a seconds-scale
++// cadence. Feeding against the most-advanced reading can only add bounded
++// extra lead, which the ES window already absorbs.
++static int64_t avp_feed_position_ns(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++
++    if (!p->item)
++        return 0;
++    int64_t pos = avp_current_time_ns(ao);
++    CMTime t = [p->item currentTime];
++    if (CMTIME_IS_NUMERIC(t))
++        pos = MPMAX(pos, CMTimeGetNanoseconds(t));
++    return MPCLAMP(pos, 0, p->es_pts);
 +}
 +
 +// Append one burst payload (byte-swapped back to the raw bitstream) to the
@@ -449,7 +469,7 @@ index 2a83027..240d95c 100644
 +    }
 +
 +    for (int guard = 0; guard < 64 && !p->avp_eof; guard++) {
-+        int64_t cur = avp_current_time_ns(ao);
++        int64_t cur = avp_feed_position_ns(ao);
 +        if (p->es_pts - cur >= (cur > 0 ? AVP_LEAD_NS : AVP_START_LEAD_NS))
 +            break;
 +        // One pull can extract every burst buffered in the stash, so demand
@@ -527,7 +547,7 @@ index 2a83027..240d95c 100644
  static void feed(struct ao *ao)
  {
      struct priv *p = ao->priv;
-@@ -144,6 +639,23 @@ static void start(struct ao *ao)
+@@ -144,6 +659,23 @@ static void start(struct ao *ao)
  {
      struct priv *p = ao->priv;
  
@@ -551,7 +571,7 @@ index 2a83027..240d95c 100644
      p->end_time_av = -1;
      [p->synchronizer setRate:1];
      [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
-@@ -155,17 +667,53 @@ static void stop(struct ao *ao)
+@@ -155,17 +687,53 @@ static void stop(struct ao *ao)
  {
      struct priv *p = ao->priv;
  
@@ -607,7 +627,7 @@ index 2a83027..240d95c 100644
      if (paused) {
          [p->synchronizer setRate:0];
      } else {
-@@ -179,6 +727,25 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
+@@ -179,6 +747,25 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
  {
      struct priv *p = ao->priv;
  
@@ -633,7 +653,7 @@ index 2a83027..240d95c 100644
      switch (cmd) {
      case AOCONTROL_GET_MUTE:
          *(bool*)arg = [p->renderer isMuted];
-@@ -215,21 +782,183 @@ - (void)handleRestartNotification:(NSNotification*)notification {
+@@ -215,21 +802,183 @@ - (void)handleRestartNotification:(NSNotification*)notification {
  }
  @end
  
@@ -820,7 +840,7 @@ index 2a83027..240d95c 100644
      if ((p->renderer = [[AVSampleBufferAudioRenderer alloc] init]) == nil) {
          MP_FATAL(ao, "failed to create audio renderer\n");
          MP_VERBOSE(ao, "AVSampleBufferAudioRenderer failed to initialize\n");
-@@ -240,14 +969,6 @@ static int init(struct ao *ao)
+@@ -240,14 +989,6 @@ static int init(struct ao *ao)
          MP_VERBOSE(ao, "AVSampleBufferRenderSynchronizer failed to initialize\n");
          goto error;
      }
@@ -835,7 +855,7 @@ index 2a83027..240d95c 100644
  
      if (ao->device && ao->device[0]) {
  #if TARGET_OS_OSX
-@@ -262,14 +983,6 @@ static int init(struct ao *ao)
+@@ -262,14 +1003,6 @@ static int init(struct ao *ao)
      }
  #endif
  
@@ -850,7 +870,7 @@ index 2a83027..240d95c 100644
      // AVSampleBufferAudioRenderer only supports interleaved formats
      ao->format = af_fmt_from_planar(ao->format);
      if (af_fmt_is_planar(ao->format)) {
-@@ -316,6 +1029,16 @@ static int init(struct ao *ao)
+@@ -316,6 +1049,16 @@ static int init(struct ao *ao)
  
  error:
      talloc_free(layout);
@@ -867,7 +887,7 @@ index 2a83027..240d95c 100644
      if (p->renderer) [p->renderer release];
      if (p->synchronizer) [p->synchronizer release];
      if (p->queue) dispatch_release(p->queue);
-@@ -337,13 +1060,27 @@ static void uninit(struct ao *ao)
+@@ -337,13 +1080,27 @@ static void uninit(struct ao *ao)
  
      stop(ao);
  
@@ -901,7 +921,7 @@ index 2a83027..240d95c 100644
  
  #if TARGET_OS_IPHONE
      [AVAudioSession.sharedInstance setActive:NO
-@@ -356,7 +1093,7 @@ static void uninit(struct ao *ao)
+@@ -356,7 +1113,7 @@ static void uninit(struct ao *ao)
  #define OPT_BASE_STRUCT struct priv
  
  const struct ao_driver audio_out_avfoundation = {

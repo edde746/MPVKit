@@ -1,5 +1,5 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index 240d95c..42f3d72 100644
+index 78da5e1..545cb1a 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
 @@ -22,6 +22,7 @@
@@ -41,7 +41,7 @@ index 240d95c..42f3d72 100644
  };
  
  #define IEC61937_HEADER_SIZE 8
-@@ -553,12 +578,92 @@ static void avp_teardown_item(struct ao *ao)
+@@ -573,12 +598,92 @@ static void avp_teardown_item(struct ao *ao)
      p->au_len = 0;
  }
  
@@ -134,7 +134,7 @@ index 240d95c..42f3d72 100644
      CMBlockBufferRef block_buffer = NULL;
      CMSampleBufferRef sample_buffer = NULL;
      OSStatus err;
-@@ -658,6 +763,14 @@ static void start(struct ao *ao)
+@@ -678,6 +783,14 @@ static void start(struct ao *ao)
  
      p->end_time_av = -1;
      [p->synchronizer setRate:1];
@@ -149,7 +149,7 @@ index 240d95c..42f3d72 100644
      [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
          feed(ao);
      }];
-@@ -677,6 +790,12 @@ static void stop(struct ao *ao)
+@@ -697,6 +810,12 @@ static void stop(struct ao *ao)
          [p->renderer stopRequestingMediaData];
          [p->renderer flush];
          [p->synchronizer setRate:0];
@@ -162,7 +162,7 @@ index 240d95c..42f3d72 100644
      };
      if (dispatch_get_specific(&avfoundation_queue_key) == p)
          stop_block();
-@@ -716,7 +835,18 @@ static bool set_pause(struct ao *ao, bool paused)
+@@ -736,7 +855,18 @@ static bool set_pause(struct ao *ao, bool paused)
  
      if (paused) {
          [p->synchronizer setRate:0];
@@ -181,7 +181,7 @@ index 240d95c..42f3d72 100644
          [p->synchronizer setRate:1];
      }
  
-@@ -970,6 +1100,35 @@ static int init(struct ao *ao)
+@@ -990,6 +1120,35 @@ static int init(struct ao *ao)
          goto error;
      }
  
@@ -217,7 +217,7 @@ index 240d95c..42f3d72 100644
      if (ao->device && ao->device[0]) {
  #if TARGET_OS_OSX
          [p->renderer setAudioOutputDeviceUniqueID:(NSString*)cfstr_from_cstr(ao->device)];
-@@ -1034,6 +1193,13 @@ static int init(struct ao *ao)
+@@ -1054,6 +1213,13 @@ static int init(struct ao *ao)
          dispatch_release(p->avp_timer);
          p->avp_timer = NULL;
      }
@@ -231,7 +231,7 @@ index 240d95c..42f3d72 100644
      if (p->loader) {
          [p->loader invalidate];
          [p->loader release];
-@@ -1073,6 +1239,19 @@ static void uninit(struct ao *ao)
+@@ -1093,6 +1259,19 @@ static void uninit(struct ao *ao)
          [p->player release];
          dispatch_release(p->queue);
      } else {
@@ -251,7 +251,7 @@ index 240d95c..42f3d72 100644
          [p->renderer release];
          [p->synchronizer release];
          dispatch_release(p->queue);
-@@ -1103,4 +1282,19 @@ static void uninit(struct ao *ao)
+@@ -1123,4 +1302,19 @@ static void uninit(struct ao *ao)
      .set_pause      = set_pause,
      .list_devs      = ca_get_device_list,
      .priv_size      = sizeof(struct priv),
