@@ -67,6 +67,9 @@ jobs:
       - name: Test AVFoundation timebase servo
         run: ./scripts/test_avf_timebase_servo.sh
 
+      - name: Test AVFoundation PiP frame-space OSD
+        run: ./scripts/test_avf_pip_frame_space_osd.sh
+
       - name: Install dependencies
         run: |
           brew install autoconf
