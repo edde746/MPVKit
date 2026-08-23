@@ -35,6 +35,10 @@ class ArgumentOptions {
     var enableSplitPlatform: Bool = false
     var platforms : [PlatformType] = []
     var releaseVersion: String = "0.0.0"
+    /// Libraries that must be compiled from source. Empty means "no restriction".
+    var libs: [Library] = []
+    /// Restore every self-built library that is not in `libs` from its published prebuilt zips.
+    var usePrebuilt: Bool = false
 
     init() {
         self.arguments = []
@@ -62,6 +66,8 @@ class ArgumentOptions {
                 options.enableDebug = true
             case "enable-split-platform":
                 options.enableSplitPlatform = true
+            case "use-prebuilt":
+                options.usePrebuilt = true
             default:
                 if argument.hasPrefix("version=") {
                     let version = String(argument.suffix(argument.count - "version=".count))
@@ -92,10 +98,101 @@ class ArgumentOptions {
                         }
                     }
                 }
+                if argument.hasPrefix("libs=") {
+                    let values = String(argument.suffix(argument.count - "libs=".count))
+                    for val in values.split(separator: ",") {
+                        let name = val.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if name.isEmpty {
+                            continue
+                        }
+                        guard let lib = Library.allCases.first(where: { $0.rawValue.lowercased() == name.lowercased() }) else {
+                            throw NSError(domain: "unknown library: \(val)", code: 1)
+                        }
+                        if !options.libs.contains(lib) {
+                            options.libs += [lib]
+                        }
+                    }
+                }
             }
         }
 
         return options
+    }
+}
+
+/// Reader for `Sources/BuildScripts/binaries.json`, the committed record of the
+/// content-addressed binaries published for the self-built libraries. The file is
+/// written by `scripts/binary_keys.py`; a missing file or a missing library entry is
+/// a soft miss so that a fresh checkout can still build everything from source.
+final class BinaryManifest {
+    struct Framework {
+        let asset: String
+        let checksum: String
+    }
+
+    struct Entry {
+        let key: String
+        let prebuilt: [PlatformType: String]
+        let frameworks: [String: Framework]
+    }
+
+    let assetBase: String
+    private let entries: [String: Entry]
+
+    private static var didLoad = false
+    private static var loaded: BinaryManifest?
+
+    /// Lazily parsed manifest, or nil when it is absent or unreadable.
+    static var shared: BinaryManifest? {
+        if !didLoad {
+            didLoad = true
+            loaded = BinaryManifest(contentsOf: URL.currentDirectory + ["..", "Sources", "BuildScripts", "binaries.json"])
+        }
+        return loaded
+    }
+
+    init?(contentsOf url: URL) {
+        guard let data = FileManager.default.contents(atPath: url.path),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let assetBase = root["assetBase"] as? String
+        else {
+            return nil
+        }
+        self.assetBase = assetBase
+
+        var entries: [String: Entry] = [:]
+        for (name, value) in root["libraries"] as? [String: Any] ?? [:] {
+            guard let library = value as? [String: Any], let key = library["key"] as? String else {
+                continue
+            }
+            var prebuilt: [PlatformType: String] = [:]
+            for (platformName, asset) in library["prebuilt"] as? [String: String] ?? [:] {
+                guard let platform = PlatformType(rawValue: platformName) else {
+                    continue
+                }
+                prebuilt[platform] = asset
+            }
+            var frameworks: [String: Framework] = [:]
+            for (frameworkName, value) in library["frameworks"] as? [String: Any] ?? [:] {
+                guard let framework = value as? [String: Any],
+                      let asset = framework["asset"] as? String,
+                      let checksum = framework["checksum"] as? String
+                else {
+                    continue
+                }
+                frameworks[frameworkName] = Framework(asset: asset, checksum: checksum)
+            }
+            entries[name] = Entry(key: key, prebuilt: prebuilt, frameworks: frameworks)
+        }
+        self.entries = entries
+    }
+
+    func entry(for library: Library) -> Entry? {
+        entries[library.rawValue]
+    }
+
+    func url(ofAsset asset: String) -> String {
+        "\(assetBase)/\(asset)"
     }
 }
 
@@ -112,6 +209,9 @@ class BaseBuild {
     let directoryURL: URL
     let xcframeworkDirectoryURL: URL
     var pullLatestVersion = false;
+    /// Set when `buildALL()` restored this library from published prebuilt zips
+    /// instead of compiling it, which also means no local xcframework exists.
+    private(set) var restoredFromPrebuilt = false
     init(library: Library) {
         self.library = library
         directoryURL = URL.currentDirectory + "\(library.rawValue)-\(library.version)"
@@ -193,6 +293,11 @@ class BaseBuild {
     }
 
     func buildALL() throws {
+        if let source = prebuiltSource() {
+            try restoreFromPrebuilt(entry: source.entry, manifest: source.manifest)
+            return
+        }
+        print("Build \(library.rawValue) \(library.version) from source")
         try beforeBuild()
         try? FileManager.default.removeItem(at: URL.currentDirectory + library.rawValue)
         try? FileManager.default.removeItem(at: directoryURL.appendingPathExtension("log"))
@@ -204,6 +309,108 @@ class BaseBuild {
         try createXCFramework()
         try packageRelease()
         try afterBuild()
+    }
+
+    /// Manifest entry to restore this library from, or nil when it has to be compiled.
+    /// A library is only restored when `use-prebuilt` was requested, it was not named in
+    /// `libs=`, and the manifest carries every platform zip plus every framework this
+    /// library publishes. Anything less falls back to compiling: correctness over speed.
+    func prebuiltSource() -> (manifest: BinaryManifest, entry: BinaryManifest.Entry)? {
+        guard BaseBuild.options.usePrebuilt else {
+            return nil
+        }
+        if BaseBuild.options.libs.contains(library) {
+            return nil
+        }
+        guard let manifest = BinaryManifest.shared, let entry = manifest.entry(for: library) else {
+            print("No prebuilt entry for \(library.rawValue) in binaries.json; building from source")
+            return nil
+        }
+        let missingPlatforms = BaseBuild.platforms.filter { entry.prebuilt[$0] == nil }
+        if !missingPlatforms.isEmpty {
+            print("Prebuilt \(library.rawValue) is missing platforms \(missingPlatforms.map(\.rawValue).joined(separator: ",")); building from source")
+            return nil
+        }
+        let missingFrameworks = library.targets.map(\.name).filter { entry.frameworks[$0] == nil }
+        if !missingFrameworks.isEmpty {
+            print("Prebuilt \(library.rawValue) is missing frameworks \(missingFrameworks.joined(separator: ",")); building from source")
+            return nil
+        }
+        return (manifest, entry)
+    }
+
+    /// Unpack the per-platform prebuilt zips of this library and lay them out under
+    /// `dist/<library>/` as if they had just been compiled. No xcframework is produced
+    /// locally: `generatePackageManagerFile()` uses the manifest's asset and checksum.
+    private func restoreFromPrebuilt(entry: BinaryManifest.Entry, manifest: BinaryManifest) throws {
+        print("Restore \(library.rawValue) from prebuilt binaries (key \(entry.key))")
+        let unpackedURL = URL.currentDirectory + "\(library.rawValue)-prebuilt-\(entry.key)"
+        try FileManager.default.createDirectory(atPath: unpackedURL.path, withIntermediateDirectories: true, attributes: nil)
+        for platform in BaseBuild.platforms {
+            guard let asset = entry.prebuilt[platform] else {
+                continue
+            }
+            let zipURL = unpackedURL + asset
+            // delete invalid downloaded files
+            let attributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path)
+            if let fileSize = attributes?[FileAttributeKey.size] as? UInt64, fileSize <= 0 {
+                try? FileManager.default.removeItem(at: zipURL)
+            }
+            if !FileManager.default.fileExists(atPath: zipURL.path) {
+                do {
+                    try Utility.launch(path: "wget", arguments: ["-O", asset, manifest.url(ofAsset: asset)], currentDirectoryURL: unpackedURL)
+                } catch {
+                    try? FileManager.default.removeItem(at: zipURL)
+                    throw error
+                }
+            }
+            // the per-platform zips share one layout, so unpacking them all into the same
+            // directory rebuilds exactly the tree `packageRelease()` would have produced
+            if !FileManager.default.fileExists(atPath: (unpackedURL + ["lib", platform.rawValue]).path) {
+                try Utility.launch(path: "/usr/bin/unzip", arguments: ["-o", "-q", asset], currentDirectoryURL: unpackedURL)
+            }
+        }
+
+        restoredFromPrebuilt = true
+        try? FileManager.default.removeItem(at: URL.currentDirectory + library.rawValue)
+        try? FileManager.default.createDirectory(atPath: (URL.currentDirectory + library.rawValue).path, withIntermediateDirectories: true, attributes: nil)
+        restorePackagedArtifacts(from: unpackedURL)
+        try afterBuild()
+    }
+
+    /// Copy an unpacked `<library>-all*.zip` tree into `dist/<library>/<platform>/thin/<arch>/`.
+    /// Shared by prebuilt restores of self-built libraries and by `ZipBaseBuild`.
+    func restorePackagedArtifacts(from unpackedURL: URL) {
+        for platform in BaseBuild.platforms {
+            for arch in architectures(platform) {
+                // restore lib
+                let srcThinLibPath = unpackedURL + ["lib"] + [platform.rawValue, "thin", arch.rawValue, "lib"]
+                // ignore if platform not support
+                if !FileManager.default.fileExists(atPath: srcThinLibPath.path) {
+                    continue
+                }
+                let destThinPath = thinDir(platform: platform, arch: arch)
+                let destThinLibPath = destThinPath + ["lib"]
+                try? FileManager.default.createDirectory(atPath: destThinPath.path, withIntermediateDirectories: true, attributes: nil)
+                try? FileManager.default.copyItem(at: srcThinLibPath, to: destThinLibPath)
+
+                // restore include
+                let srcIncludePath = unpackedURL + ["include"]
+                let destIncludePath = destThinPath + ["include"]
+                try? FileManager.default.copyItem(at: srcIncludePath, to: destIncludePath)
+
+                // restore pkgconfig
+                let srcPkgConfigPath = unpackedURL + ["pkgconfig-example", platform.rawValue, arch.rawValue]
+                let destPkgConfigPath = destThinPath + ["lib", "pkgconfig"]
+                try? FileManager.default.copyItem(at: srcPkgConfigPath, to: destPkgConfigPath)
+                Utility.listAllFiles(in: destPkgConfigPath).forEach { file in
+                    if let data = FileManager.default.contents(atPath: file.path), var str = String(data: data, encoding: .utf8) {
+                        str = str.replacingOccurrences(of: "/path/to/workdir", with: URL.currentDirectory.path)
+                        try! str.write(toFile: file.path, atomically: true, encoding: .utf8)
+                    }
+                }
+            }
+        }
     }
 
     func afterBuild() throws {
@@ -799,14 +1006,29 @@ class BaseBuild {
                 try? FileManager.default.removeItem(at: tmpChecksum)
             }
         } else {
+            // Self-built library (libass, FFmpeg, libmpv). The published binary is
+            // content-addressed, so its URL and checksum come from binaries.json whenever
+            // this run did not compile the library itself. A locally compiled library keeps
+            // the locally computed checksum: the manifest still describes the previous bytes
+            // until `binary_keys.py record-frameworks` refreshes it.
+            let manifest = BinaryManifest.shared
+            let entry = manifest?.entry(for: library)
             for target in library.targets {
                 let checksumFile = releaseDirPath + [target.name + ".xcframework.checksum.txt"]
-                let checksum = try String(contentsOf: checksumFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                let hasLocalChecksum = !restoredFromPrebuilt && FileManager.default.fileExists(atPath: checksumFile.path)
+                var url = target.url
+                var checksum: String
+                if let manifest, let framework = entry?.frameworks[target.name], !hasLocalChecksum {
+                    url = manifest.url(ofAsset: framework.asset)
+                    checksum = framework.checksum
+                } else {
+                    checksum = try String(contentsOf: checksumFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
                 dependencyTargetContent += """
 
                         .binaryTarget(
                             name: "\(target.name)",
-                            url: "\(target.url)",
+                            url: "\(url)",
                             checksum: "\(checksum)"
                         ),
                 """
@@ -974,36 +1196,7 @@ class ZipBaseBuild : BaseBuild {
         try? FileManager.default.removeItem(at: URL.currentDirectory + library.rawValue)
         try? FileManager.default.removeItem(at: directoryURL.appendingPathExtension("log"))
         try? FileManager.default.createDirectory(atPath: (URL.currentDirectory + library.rawValue).path, withIntermediateDirectories: true, attributes: nil)
-        for platform in BaseBuild.platforms {
-            for arch in architectures(platform) {
-                // restore lib
-                let srcThinLibPath = directoryURL + ["lib"] + [platform.rawValue, "thin", arch.rawValue, "lib"]
-                // ignore if platform not support
-                if !FileManager.default.fileExists(atPath: srcThinLibPath.path) {
-                    continue
-                }
-                let destThinPath = thinDir(platform: platform, arch: arch)
-                let destThinLibPath = destThinPath + ["lib"]
-                try? FileManager.default.createDirectory(atPath: destThinPath.path, withIntermediateDirectories: true, attributes: nil)
-                try? FileManager.default.copyItem(at: srcThinLibPath, to: destThinLibPath)
-
-                // restore include
-                let srcIncludePath = directoryURL + ["include"]
-                let destIncludePath = destThinPath + ["include"]
-                try? FileManager.default.copyItem(at: srcIncludePath, to: destIncludePath)
-
-                // restore pkgconfig
-                let srcPkgConfigPath = directoryURL + ["pkgconfig-example", platform.rawValue, arch.rawValue]
-                let destPkgConfigPath = destThinPath + ["lib", "pkgconfig"]
-                try? FileManager.default.copyItem(at: srcPkgConfigPath, to: destPkgConfigPath)
-                Utility.listAllFiles(in: destPkgConfigPath).forEach { file in
-                    if let data = FileManager.default.contents(atPath: file.path), var str = String(data: data, encoding: .utf8) {
-                        str = str.replacingOccurrences(of: "/path/to/workdir", with: URL.currentDirectory.path)
-                        try! str.write(toFile: file.path, atomically: true, encoding: .utf8)
-                    }
-                }
-            }
-        }
+        restorePackagedArtifacts(from: directoryURL)
 
         try afterBuild()
     }

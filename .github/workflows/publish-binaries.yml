@@ -1,0 +1,319 @@
+name: Publish binaries
+
+# Every push to main publishes the binaries that commit needs, so any commit on
+# main is pinnable. Asset names are content-addressed (they carry a key derived
+# from the sources that produced them), which makes them immutable: an asset
+# that already exists on the rolling prerelease is byte-identical to the one
+# this run would upload, so it is skipped instead of clobbered.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Two pushes must never interleave asset uploads or commits to main, and a
+# cancelled run could leave the manifest committed without its assets.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Patch regression tests
+    # The marker sits on this workflow's own commit, so the run it triggers
+    # stops here instead of looping.
+    if: ${{ !contains(github.event.head_commit.message, '[skip binaries]') }}
+    permissions:
+      contents: read
+    # The harnesses need only bash, python3 and cc, but not a Linux cc:
+    # test_avf_timebase_servo.c uses M_PI under -std=c11, which glibc hides in
+    # strict ISO mode (gcc 13 on ubuntu-24.04: "'M_PI' undeclared"), while
+    # Apple libc exposes it. Keep them on the compiler they are written for.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test AO PCM lookahead
+        run: ./scripts/test_ao_pcm_lookahead.sh
+
+      - name: Test AO compressed-audio option
+        run: ./scripts/test_ao_compressed_audio_option.sh
+
+      - name: Test AO probe refusal
+        run: ./scripts/test_ao_probe_refusal.sh
+
+      - name: Test AVFoundation timebase servo
+        run: ./scripts/test_avf_timebase_servo.sh
+
+      - name: Test AVFoundation PiP frame-space OSD
+        run: ./scripts/test_avf_pip_frame_space_osd.sh
+
+      - name: Test binary content keys
+        run: ./scripts/test_binary_keys.sh
+
+  plan:
+    name: Plan
+    needs: tests
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.stale.outputs.stale }}
+      any: ${{ steps.stale.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute stale libraries
+        id: stale
+        # shell: bash adds pipefail, which the default `bash -e` lacks, so a
+        # crash in binary_keys.py is not swallowed by the pipe into paste.
+        shell: bash
+        run: |
+          stale="$(python3 scripts/binary_keys.py stale | paste -sd, -)"
+          echo "stale=${stale}" >> "$GITHUB_OUTPUT"
+          if [ -n "${stale}" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "rebuilding: ${stale}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "binaries already published for this tree" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Nothing to build means the committed manifest must already describe this
+      # tree exactly, otherwise the commit is not pinnable and no later job
+      # would notice.
+      - name: Verify committed binaries match this commit
+        if: steps.stale.outputs.any == 'false'
+        run: python3 scripts/binary_keys.py verify
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    permissions:
+      contents: read
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            platforms: macos
+            platform_type: macos
+          - name: maccatalyst
+            platforms: maccatalyst
+            platform_type: maccatalyst
+          - name: iphoneos
+            platforms: ios-device
+            platform_type: ios
+          - name: iphonesimulator
+            platforms: ios-simulator
+            platform_type: isimulator
+          - name: tvos
+            platforms: tvos-device
+            platform_type: tvos
+          - name: tvsimulator
+            platforms: tvos-simulator
+            platform_type: tvsimulator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install autoconf automake libtool ninja
+          python -m pip install meson==1.4.2
+
+      # Only the stale libraries are compiled; the rest are restored from their
+      # published per-platform zips. No version= argument: the URLs the build
+      # script would spell from it are replaced by the manifest's
+      # content-addressed ones in the publish job.
+      - name: Build GPL version (${{ matrix.name }})
+        run: |
+          make build enable-gpl use-prebuilt libs=${{ needs.plan.outputs.stale }} platform=${{ matrix.platforms }}
+
+      - name: Name per-platform binaries by content (${{ matrix.platform_type }})
+        run: |
+          python3 scripts/binary_keys.py record-platform \
+            --platform ${{ matrix.platform_type }} \
+            --release-dir dist/release
+
+      - name: Upload platform build (${{ matrix.name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-${{ matrix.name }}
+          path: |
+            ./dist/release/*.zip
+            ./dist/release/*.checksum.txt
+            ./dist/release/Package.swift
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    permissions:
+      contents: write
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download platform builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: platform-*
+          path: ./dist/partials
+
+      - name: Merge platform XCFrameworks
+        run: |
+          python3 - <<'PY'
+          import shutil
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          partial_root = Path('dist/partials')
+          release_dir = Path('dist/release')
+          xcframework_dir = release_dir / 'xcframework'
+
+          if release_dir.exists():
+            shutil.rmtree(release_dir)
+          release_dir.mkdir(parents=True)
+          xcframework_dir.mkdir()
+
+          # The per-platform zips pass straight through: they are the artifacts a
+          # later run restores instead of recompiling, and they are already named
+          # by content.
+          prebuilt_zips = sorted(partial_root.glob('*/*-all-*.zip'))
+          for zip_path in prebuilt_zips:
+            shutil.copy2(zip_path, release_dir / zip_path.name)
+          print(f'Collected {len(prebuilt_zips)} per-platform prebuilt zips')
+
+          grouped_zips = {}
+          for zip_path in partial_root.glob('*/*.xcframework.zip'):
+            grouped_zips.setdefault(zip_path.name, []).append(zip_path)
+          if not grouped_zips:
+            raise SystemExit('No platform XCFramework artifacts found')
+
+          for zip_name, zip_parts in sorted(grouped_zips.items()):
+            framework_name = zip_name[:-len('.xcframework.zip')]
+            output_xcframework = xcframework_dir / f'{framework_name}.xcframework'
+            framework_paths = []
+
+            with tempfile.TemporaryDirectory() as tmp:
+              tmp_path = Path(tmp)
+              for index, zip_part in enumerate(sorted(zip_parts)):
+                extract_dir = tmp_path / f'part-{index}'
+                extract_dir.mkdir()
+                subprocess.run(['/usr/bin/unzip', '-q', str(zip_part.resolve()), '-d', str(extract_dir)], check=True)
+                framework_paths.extend(sorted(path for path in extract_dir.glob('*.xcframework/**/*.framework') if path.is_dir()))
+
+              if not framework_paths:
+                raise SystemExit(f'No frameworks found inside {zip_name}')
+
+              args = ['/usr/bin/xcodebuild', '-create-xcframework']
+              for framework_path in framework_paths:
+                args.extend(['-framework', str(framework_path)])
+              args.extend(['-output', str(output_xcframework)])
+              subprocess.run(args, check=True)
+
+            merged_zip = release_dir / zip_name
+            subprocess.run(['/usr/bin/zip', '-qry', str(merged_zip.resolve()), output_xcframework.name], cwd=xcframework_dir, check=True)
+            print(f'Merged {zip_name} from {len(zip_parts)} platform artifacts')
+          PY
+
+      - name: Name frameworks by content and record them
+        run: python3 scripts/binary_keys.py record-frameworks --release-dir dist/release
+
+      - name: Render Package.swift from the manifest
+        run: python3 scripts/binary_keys.py render
+
+      - name: Verify manifest matches this commit
+        run: python3 scripts/binary_keys.py verify
+
+      - name: Upload binaries that are not published yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view binaries >/dev/null 2>&1; then
+            gh release create binaries \
+              --prerelease \
+              --title "Rolling binaries" \
+              --notes "Content-addressed build artifacts for the commits on main. Asset names encode the sources they were built from, so every asset is immutable and is never replaced. Package.swift pins these URLs; deleting an asset breaks every commit and tag that references it."
+          fi
+
+          gh release view binaries --json assets --jq '.assets[].name' > ./dist/published-assets.txt
+
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          manifest = json.loads(Path('Sources/BuildScripts/binaries.json').read_text(encoding='utf-8'))
+          published = {line.strip() for line in Path('dist/published-assets.txt').read_text(encoding='utf-8').splitlines() if line.strip()}
+          release_dir = Path('dist/release')
+
+          wanted = []
+          for library, entry in sorted(manifest['libraries'].items()):
+            for asset in entry.get('prebuilt', {}).values():
+              wanted.append((library, asset))
+            for framework in entry.get('frameworks', {}).values():
+              wanted.append((library, framework['asset']))
+
+          uploads = []
+          seen = set()
+          missing = []
+          for library, asset in wanted:
+            if asset in seen:
+              continue
+            seen.add(asset)
+            if asset in published:
+              print(f'published {asset}')
+              continue
+            path = release_dir / asset
+            if path.is_file():
+              uploads.append(path)
+            else:
+              missing.append(f'{library}: {asset}')
+
+          # A manifest asset that is neither published nor built would leave a
+          # dead URL in Package.swift, so refuse to commit that manifest.
+          if missing:
+            raise SystemExit('manifest references assets that were neither published nor built:\n  ' + '\n  '.join(missing))
+
+          if not uploads:
+            print('every manifest asset is already published')
+          else:
+            for path in uploads:
+              print(f'upload    {path.name}')
+            # No --clobber: an existing name is the same bytes by construction.
+            subprocess.run(['gh', 'release', 'upload', 'binaries', *(str(path) for path in uploads)], check=True)
+          PY
+
+      - name: Check for manifest changes
+        id: changes
+        run: |
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          if [ -n "$(git status --porcelain -- Package.swift Sources/BuildScripts/binaries.json)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # No pull/rebase before this: if main moved while the binaries were
+      # building, this run is superseded and its push is meant to be rejected.
+      # Rebasing would land a manifest computed from an older tree on top of the
+      # newer one, which is exactly the skew `verify` exists to prevent; the
+      # queued run for the newer commit publishes the right manifest instead.
+      # The assets uploaded above are content-addressed, so that run reuses them.
+      - name: Push binary manifest
+        if: steps.changes.outputs.changed == 'true'
+        uses: EndBug/add-and-commit@v9
+        with:
+          default_author: github_actions
+          add: |
+            - Package.swift
+            - Sources/BuildScripts/binaries.json
+          message: "chore: binaries for ${{ steps.changes.outputs.short_sha }} [skip binaries]"
+          push: "origin HEAD:${{ github.ref_name }}"

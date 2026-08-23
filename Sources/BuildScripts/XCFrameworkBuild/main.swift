@@ -4,31 +4,47 @@ do {
     let options = try ArgumentOptions.parse(CommandLine.arguments)
     try Build.performCommand(options)
 
-    // libass
-    try BuildUnibreak().buildALL()
-    try BuildFreetype().buildALL()
-    try BuildFribidi().buildALL()
-    try BuildHarfbuzz().buildALL()
-    try BuildASS().buildALL()
+    // Dependency order matters: every library links against the ones before it.
+    let builds: [BaseBuild] = [
+        // libass
+        BuildUnibreak(),
+        BuildFreetype(),
+        BuildFribidi(),
+        BuildHarfbuzz(),
+        BuildASS(),
 
-    // libbluray
-    try BuildBluray().buildALL()
+        // libbluray
+        BuildBluray(),
 
-    // ffmpeg
-    try BuildOpenSSL().buildALL()
-    try BuildUavs3d().buildALL()
-    try BuildDovi().buildALL()
-    try BuildVulkan().buildALL()
-    try BuildShaderc().buildALL()
-    try BuildLittleCms().buildALL()
-    try BuildPlacebo().buildALL()
-    try BuildDav1d().buildALL()
-    try BuildFFMPEG().buildALL()
+        // ffmpeg
+        BuildOpenSSL(),
+        try BuildUavs3d(),
+        try BuildDovi(),
+        BuildVulkan(),
+        try BuildShaderc(),
+        BuildLittleCms(),
+        BuildPlacebo(),
+        BuildDav1d(),
+        BuildFFMPEG(),
 
-    // mpv
-    try BuildUchardet().buildALL()
-    try BuildLuaJIT().buildALL()
-    try BuildMPV().buildALL()
+        // mpv
+        BuildUchardet(),
+        BuildLuaJIT(),
+        BuildMPV(),
+    ]
+
+    if !options.libs.isEmpty {
+        print("libs=\(options.libs.map(\.rawValue).joined(separator: ",")): only these libraries are compiled from source")
+    }
+    if options.usePrebuilt {
+        print("use-prebuilt: self-built libraries outside libs= are restored from binaries.json when it covers them")
+    }
+
+    // No library is ever skipped: `buildALL()` restores it from the manifest when that is
+    // possible and compiles it otherwise, so an unlisted, unpublished library still builds.
+    for build in builds {
+        try build.buildALL()
+    }
 } catch {
     print(error.localizedDescription)
     exit(1)

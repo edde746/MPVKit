@@ -28,6 +28,38 @@ https://github.com/mpvkit/MPVKit.git
 
 MPVKit ships as a GPL build. See [FFmpeg details](https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md) and [mpv details](https://github.com/mpv-player/mpv/blob/master/Copyright).
 
+### Pinning a commit
+
+Every push to `main` publishes the binaries that commit needs, so a consumer can
+pin any commit and get artifacts built from exactly its sources. In Xcode, add
+the package with `Branch/Commit` -> the commit SHA (`kind = revision` in
+`project.pbxproj`); semver tags keep working for anyone who wants them.
+
+Binaries are content-addressed: an asset name carries a 12-character key derived
+from the library's upstream version, its patch series, the build flags, the
+platform set, the build scripts and the toolchain generation. Assets are
+therefore immutable and all live in one rolling
+[`binaries`](https://github.com/edde746/MPVKit/releases/tag/binaries) prerelease;
+a semver release is a tag plus notes and carries no assets of its own.
+`Sources/BuildScripts/binaries.json` records which asset belongs to which
+library, and `scripts/binary_keys.py verify` is the gate that keeps every commit
+on `main` pinnable:
+
+```bash
+# what this working tree needs, and whether it is already published
+python3 scripts/binary_keys.py keys
+python3 scripts/binary_keys.py stale
+# fail if the committed manifest or Package.swift do not describe this tree
+python3 scripts/binary_keys.py verify
+```
+
+A commit that touches only `Sources/BuildScripts/patch/libmpv/*` moves libmpv's
+key alone, so CI compiles libmpv and restores libass and FFmpeg from their
+published thin install trees. Editing any build script moves every key, on
+purpose: under-invalidating would ship stale binaries. To force a full rebuild
+without a source change -- a new Xcode or SDK, a miscompile -- bump the
+generation in `Sources/BuildScripts/toolchain.txt`.
+
 
 ## How to build
 
