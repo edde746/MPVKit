@@ -848,6 +848,7 @@ class BaseBuild {
         [built-in options]
         default_library = 'static'
         buildtype = 'release'
+        b_ndebug = 'true'
         prefix = '\(prefix.path)'
         c_args = [\(cFlags)]
         cpp_args = [\(cFlags)]
