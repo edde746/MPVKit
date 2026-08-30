@@ -7,6 +7,9 @@ VideoToolbox can attach platform-native Dolby Vision/HDR display metadata
 to decoded pixel buffers. Do not overwrite those attachments with FFmpeg's
 container-level color fields for frames decoded through the Apple Dolby
 Vision HEVC path.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 11 ++++++++++-
  1 file changed, 10 insertions(+), 1 deletion(-)

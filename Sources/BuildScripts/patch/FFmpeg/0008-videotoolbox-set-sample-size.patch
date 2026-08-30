@@ -7,6 +7,9 @@ VideoToolbox's Dolby Vision HEVC decoder can reject compressed samples
 with kCMBlockBufferBadLengthParameterErr when the CMSampleBuffer omits an
 explicit sample-size array. Provide the single sample size alongside the
 CMBlockBuffer instead of relying on CoreMedia to infer it from the block.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 5 +++--
  1 file changed, 3 insertions(+), 2 deletions(-)

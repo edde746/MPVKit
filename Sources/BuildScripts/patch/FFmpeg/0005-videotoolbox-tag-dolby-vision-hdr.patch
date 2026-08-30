@@ -10,6 +10,9 @@ base layer. Profile 5 is left to VideoToolbox's native Dolby Vision
 metadata because its base is not BT.2020 YCbCr. Also enable
 VideoToolbox's per-frame HDR display metadata propagation/generation
 where the OS supports it.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 121 ++++++++++++++++++++++++++++++++++++++
  1 file changed, 121 insertions(+)

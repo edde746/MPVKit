@@ -1,3 +1,6 @@
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
+
 diff --git a/video/out/vulkan/context_moltenvk.m b/video/out/vulkan/context_moltenvk.m
 index 8c8354d..70c7cdc 100644
 --- a/video/out/vulkan/context_moltenvk.m

@@ -13,6 +13,9 @@ The conversion mode is selected by PLEZY_DV_CONVERSION_MODE:
 auto/dv81 convert profile 7 to profile 8.1, hevc_strip drops only
 profile 7 RPU/EL NALs on the plain HEVC path, and disabled keeps profile 7
 unchanged.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 175 ++++++++++++++++++++++++++++++++++++--
  1 file changed, 171 insertions(+), 4 deletions(-)

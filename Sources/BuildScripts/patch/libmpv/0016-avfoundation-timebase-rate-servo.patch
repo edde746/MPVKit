@@ -33,6 +33,9 @@ model and zero with frame-duration rate estimation.
 
 The 5s pacing diagnostics report rate updates, applied offset in ppm, and
 the window's peak phase error.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  video/out/vo_avfoundation.m | 344 ++++++++++++++++++++++++++++++------
  1 file changed, 293 insertions(+), 51 deletions(-)

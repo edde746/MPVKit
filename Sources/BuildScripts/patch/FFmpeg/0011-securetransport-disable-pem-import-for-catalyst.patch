@@ -7,6 +7,9 @@ Mac Catalyst exposes Secure Transport but not the SecItemImport PEM import
 types used for custom CA and client certificate files. Disable this optional
 path on Catalyst so the Secure Transport backend still builds and uses system
 trust for normal HTTPS connections.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavformat/tls_securetransport.c | 7 ++++++-
  1 file changed, 6 insertions(+), 1 deletion(-)

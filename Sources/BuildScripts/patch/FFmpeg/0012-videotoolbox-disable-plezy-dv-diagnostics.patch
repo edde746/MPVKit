@@ -5,6 +5,9 @@ Subject: [PATCH] videotoolbox: disable Plezy Dolby Vision diagnostics
 
 Keep the profile 7 to profile 8.1 conversion mode handling, but remove the
 temporary diagnostic env/log path from the FFmpeg patch stack before release.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 57 --------------------------------------
  libavcodec/vt_internal.h  |  3 --

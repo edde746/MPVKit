@@ -1,3 +1,6 @@
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
+
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
 index 46e8afb..2bd1392 100644
 --- a/audio/out/ao_avfoundation.m

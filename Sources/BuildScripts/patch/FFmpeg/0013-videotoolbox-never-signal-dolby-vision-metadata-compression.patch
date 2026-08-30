@@ -15,6 +15,9 @@ kVTVideoDecoderUnsupportedDataFormatErr (-12910), silently dropping
 Backward-compatible profiles (the only ones routed to the Apple Dolby
 Vision decoder here) must signal uncompressed metadata per the Dolby
 spec, so never set the compression bits.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 12 +++++++-----
  1 file changed, 7 insertions(+), 5 deletions(-)

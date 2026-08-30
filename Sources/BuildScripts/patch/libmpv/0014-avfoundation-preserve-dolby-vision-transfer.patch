@@ -3,6 +3,8 @@ From: edde746 <86283021+edde746@users.noreply.github.com>
 Date: Mon, 13 Jul 2026 22:38:36 +0200
 Subject: [PATCH] fix(avfoundation): preserve Dolby Vision transfer metadata
 
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  video/out/vo_avfoundation.m | 21 +++++++++++++++++++++
  1 file changed, 21 insertions(+)

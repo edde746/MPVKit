@@ -16,6 +16,9 @@ Key the per-frame Dolby Vision handling (RPU forwarding, attachment
 preservation and tagging) off the live session codec type instead of
 the stream side data, so a downgraded session is treated exactly like
 a plain HEVC one.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 54 ++++++++++++++++++++++++++++++++++++++-
  1 file changed, 53 insertions(+), 1 deletion(-)

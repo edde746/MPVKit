@@ -6,6 +6,9 @@ Subject: [PATCH] hevc: downlevel duplicate Dolby Vision RPU log
 Dolby Vision streams can produce duplicate RPU messages for many frames.
 Keep the parser behavior unchanged, but avoid warning-level log spam during
 normal playback.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/hevc/hevcdec.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)

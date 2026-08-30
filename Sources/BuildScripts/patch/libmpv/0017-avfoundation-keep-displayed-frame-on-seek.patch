@@ -17,6 +17,9 @@ discarded, but the on-screen frame holds until the first frame at the
 new position re-anchors the timebase and replaces it. The OSD layer
 keeps removing its image so a stale subtitle doesn't linger over the
 held frame, and uninit still removes the image on teardown.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  video/out/vo_avfoundation.m | 10 ++++++++--
  1 file changed, 8 insertions(+), 2 deletions(-)

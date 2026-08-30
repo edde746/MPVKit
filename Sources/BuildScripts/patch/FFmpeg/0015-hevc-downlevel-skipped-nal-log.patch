@@ -10,6 +10,9 @@ floods libmpv clients during verbose playback diagnostics.
 
 Keep decode behavior unchanged, but emit the benign skipped-NAL message only at
 verbose level.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/hevc/hevcdec.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)

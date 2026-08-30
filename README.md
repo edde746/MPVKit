@@ -2,7 +2,7 @@
 
 [![mpv](https://img.shields.io/badge/mpv-v0.41.0-blue.svg)](https://github.com/mpv-player/mpv)
 [![ffmpeg](https://img.shields.io/badge/ffmpeg-n8.0.1-blue.svg)](https://github.com/FFmpeg/FFmpeg)
-[![license](https://img.shields.io/github/license/mpvkit/MPVKit)](https://github.com/mpvkit/MPVKit/main/LICENSE)
+[![license](https://img.shields.io/github/license/edde746/MPVKit)](LICENSE)
 
 > MPVKit is only suitable for learning `libmpv` and will not be maintained too frequently.
 
@@ -26,7 +26,9 @@ https://github.com/mpvkit/MPVKit.git
 
 ### License
 
-MPVKit ships as a GPL build. See [FFmpeg details](https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md) and [mpv details](https://github.com/mpv-player/mpv/blob/master/Copyright).
+This fork is **GPL-3.0-only**, and ships a GPL build. See [LICENSING.md](LICENSING.md) for what that
+covers, plus [FFmpeg details](https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md) and
+[mpv details](https://github.com/mpv-player/mpv/blob/master/Copyright).
 
 ### Pinning a commit
 
@@ -144,4 +146,10 @@ If you appreciate my current work, you can buy me a cup of coffee ☕️.
 
 ## License
 
-`MPVKit` bundles (`frameworks`, `xcframeworks`), which include both `libmpv` and `FFmpeg` libraries, are licensed under the GPL v3.0.
+This fork's own source is **GPL-3.0-only** (see [`LICENSE`](LICENSE)), and so are the patches under
+`Sources/BuildScripts/patch/` that originate here. The `MPVKit` bundles (`frameworks`,
+`xcframeworks`), which include both `libmpv` and `FFmpeg`, are licensed under the GPL v3.0.
+
+Upstream [mpvkit/MPVKit](https://github.com/mpvkit/MPVKit) is LGPL-3.0; this fork removes the
+additional permissions as LGPL-3.0 §2(b) and GPL-3.0 §7 allow. Full breakdown, including the
+third-party patches that keep their own terms: [LICENSING.md](LICENSING.md).

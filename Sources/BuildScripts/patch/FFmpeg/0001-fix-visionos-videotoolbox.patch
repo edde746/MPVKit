@@ -9,6 +9,9 @@ kCVPixelBufferOpenGLESCompatibilityKey and
 kCVPixelBufferIOSurfaceOpenGLTextureCompatibilityKey are unavailable.
 Guard both OpenGL code paths with !TARGET_OS_VISION and !TARGET_OS_MACCATALYST
 to allow builds on these platforms while maintaining iOS and macOS compatibility.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)

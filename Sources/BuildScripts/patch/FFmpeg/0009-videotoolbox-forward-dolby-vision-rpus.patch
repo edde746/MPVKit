@@ -12,6 +12,9 @@ Append the RPU NALs into the length-prefixed compressed sample before the
 frame is submitted to VideoToolbox. Profile 7 uses the same libdovi P8.1
 conversion path as the slice callback so raw P7 RPUs are never mixed into
 the synthetic P8.1 VideoToolbox session.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 47 ++++++++++++++++++++++++++++++++++++++++++++-
  libavcodec/vt_internal.h  |  3 +++

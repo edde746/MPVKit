@@ -7,6 +7,9 @@ Create VideoToolbox sessions with a Dolby Vision HEVC sample description
 for Apple-supported single-layer HEVC Dolby Vision profiles. This lets
 VideoToolbox see the compressed Dolby Vision configuration before decode
 instead of receiving only a plain HEVC hvcC description.
+
+SPDX-License-Identifier: GPL-3.0-only
+Copyright (C) 2025-2026 edde746
 ---
  libavcodec/videotoolbox.c | 81 +++++++++++++++++++++++++++++++++++++-
  1 file changed, 80 insertions(+), 1 deletion(-)
